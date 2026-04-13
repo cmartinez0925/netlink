@@ -12,6 +12,7 @@ consistency and ease of development across the framework.
 
 import os
 import sys
+
 from scapy.all import conf
 from scapy.all import get_if_list
 

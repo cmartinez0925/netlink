@@ -115,7 +115,7 @@ class Engine:
             self.output_manager.error(err_msg)
             return
 
-        # Log the module being run and execute the module's main logic
+        # Execute the module's main logic
         mod_header_msg = f"Running module: {mod_cls.NAME}"
         self.output_manager.header(mod_header_msg)
         mod_instance.run(args)

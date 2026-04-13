@@ -113,6 +113,11 @@ def main():
     # Apply global output settings (JSON mode and output file) to the
     # OutputManager instance
     engine.output_manager.json_mode = args.json_mode
+
+    # Handle output file argument. If an output file is specified,
+    # open the file and set it as the output destination for the
+    # OutputManager instance. The file will be closed when the
+    # OutputManager instance is destroyed.
     if args.outfile is not None:
         engine.output_manager.outfile = open(args.outfile, 'w')
     
