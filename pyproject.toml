@@ -8,3 +8,6 @@ dependencies = [
     "rich>=14.3.3",
     "scapy>=2.7.0",
 ]
+
+[project.scripts]
+netlink = "netlink.cli:main"

@@ -61,6 +61,8 @@ class OutputManager:
         Args:
             msg (str): The header message to display.
         """
+        if self.json_mode:
+            return
         panel = Panel(msg, expand=False)
         self.console.print(panel)
 

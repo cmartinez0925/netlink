@@ -10,7 +10,9 @@ across the framework.
 """
 
 import argparse
+
 from abc import ABC, abstractmethod
+from netlink.core.output import OutputManager
 
 class BaseModule(ABC):
     """
@@ -30,7 +32,7 @@ class BaseModule(ABC):
     ####################################################################
     # Constructor
     ####################################################################
-    def __init__(self, iface: str, output: object):
+    def __init__(self, iface: str, output: OutputManager):
         """
         Initializes the BaseModule with the given interface and output
         handler.

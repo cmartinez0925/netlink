@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# netlink output files
+*.json
+*.jsonl
+
+# macOS
+.DS_Store
+
+# uv
+uv.lock
