@@ -2,7 +2,7 @@
 Author: Chris Martinez
 Date: 13 April 2026
 Version: 1.0.0
-Name: __init__.py
+Name: __init__.py (discovery)
 Description: This module discovers if any hosts on the network are
 alive. It sends ARP requests to the specified IP range and listens for
 responses. The module can be used to quickly identify active hosts on 
