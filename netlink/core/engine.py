@@ -11,6 +11,7 @@ for initializing the framework, loading modules, and executing the main
 logic of the framework based on user input and module requirements.
 """
 
+import argparse
 import importlib
 import pkgutil
 import inspect
@@ -80,7 +81,7 @@ class Engine:
                     else:
                         self.modules[cls.NAME] = cls 
 
-    def run(self, mod_name: str, args) -> None:
+    def run(self, mod_name: str, args: argparse.Namespace) -> None:
         """
         Executes the specified module with the given arguments. This 
         method checks if the module exists, validates any requirements 

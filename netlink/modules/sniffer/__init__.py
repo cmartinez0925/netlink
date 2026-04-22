@@ -91,7 +91,23 @@ class Sniffer(BaseModule):
         Returns:
             bool: True if the module executed successfully, False otherwise.
         """
-        pass
+        sniff_kwargs = {
+            'iface': self.iface,
+            'count': args.count,
+            'timeout': args.timeout,
+            'prn': self._process_packet,
+        }
+
+        if args.filter:
+            sniff_kwargs['filter'] = args.filter
+
+        pkts = sniff(**sniff_kwargs)
+
+        if args.pcap:
+            wrpcap(args.pcap, pkts)
+        
+        msg = f"Total amount of packets captured -> {len(pkts)} Packet(s)"
+        self.output.info(msg)
 
     def validate_args(self, args) -> bool:
         """
@@ -104,7 +120,10 @@ class Sniffer(BaseModule):
         Returns:
             bool: True if the arguments are valid, False otherwise.
         """
-        pass
+        if args.count <= 0:
+            self.output.warn("Count must be greater than 0 packets")
+            return False
+        return True
 
     def _process_packet(self,pkt: Packet) -> None:
         """
