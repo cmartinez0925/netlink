@@ -81,7 +81,7 @@ class Sniffer(BaseModule):
             help="Stop sniffing after N seconds (Dafault=None)"
         )
 
-    def run(self, args: argparse.Namespace) -> bool:
+    def run(self, args: argparse.Namespace) -> None:
         """
         Executes the main functionality of the sniffer module. This method is
         called by the Engine when the user runs this module from the CLI.
