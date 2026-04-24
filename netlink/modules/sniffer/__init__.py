@@ -42,7 +42,14 @@ class Sniffer(BaseModule):
         Args:
             parser (argparse.ArgumentParser): The argument parser to which
                                               module-specific args are added.
-        """  
+        """
+        parser.description = (
+            "Capture and decode live network traffic on the specified "
+            "interface. Supports BPF filters to narrow capture to specific "
+            "protocols or hosts. Optionally saves captured packets to a PCAP "
+            "file for analysis in Wireshark."
+        )
+          
         parser.add_argument(
             '-c',
             '--count',
@@ -109,7 +116,7 @@ class Sniffer(BaseModule):
         msg = f"Total amount of packets captured -> {len(pkts)} Packet(s)"
         self.output.info(msg)
 
-    def validate_args(self, args) -> bool:
+    def validate_args(self, args: argparse.Namespace) -> bool:
         """
         Validates the provided arguments for the sniffer module. This method is
         called by the Engine after parsing the command-line arguments to ensure
@@ -120,16 +127,17 @@ class Sniffer(BaseModule):
         Returns:
             bool: True if the arguments are valid, False otherwise.
         """
-        if args.count <= 0:
+        if args.count < 0:
             self.output.warn("Count must be greater than 0 packets")
             return False
         return True
 
-    def _process_packet(self,pkt: Packet) -> None:
+    def _process_packet(self, pkt: Packet) -> None:
         """
-        Internal method to process each captured packet. This method is called
-        by Scapy for each packet that matches the specified filter during 
-        sniffing.
+        Handles incoming network packets by extracting key metadata and logging
+        the results. It identifies IP-based traffic (TCP, UDP, ICMP) and ARP 
+        requests, formatting the connection details for both console output and
+        structured data recording.
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
         """

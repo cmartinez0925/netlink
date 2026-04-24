@@ -45,6 +45,13 @@ class Scanner(BaseModule):
             parser (argparse.ArgumentParser): The argument parser to which
                                               module-specific args are added.
         """
+        parser.description = (
+            "Perform a TCP SYN scan on the specified target to identify open "
+            "ports. Sends SYN packets to each port and analyzes responses — "
+            "SYN-ACK means open, RST means closed, no response means filtered. "
+            "Requires root."
+        )
+        
         parser.add_argument(
             '-t',
             '--target',

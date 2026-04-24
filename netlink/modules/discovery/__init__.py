@@ -43,6 +43,13 @@ class Discovery(BaseModule):
             parser (argparse.ArgumentParser): The argument parser to which
                                               module-specific args are added.
         """
+        parser.description = (
+            "Perform an ARP sweep on the specified network to discover live "
+            "hosts. Sends ARP requests to every IP in the target range and "
+            "collects replies. Only works on local subnets since ARP does not "
+            "cross routers."
+        )
+        
         parser.add_argument(
             '-t',
             '--target',

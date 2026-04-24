@@ -38,7 +38,7 @@ class BaseModule(ABC):
         handler.
         Args:
             iface (str): The network interface to use for the module.
-            output (object): An instance of the Output class for 
+            output (OutputManager): An instance of the Output class for 
                             handling output and logging.
         """
         self.iface = iface
