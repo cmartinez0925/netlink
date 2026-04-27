@@ -96,7 +96,7 @@ class Sniffer(BaseModule):
             args (argparse.Namespace): The parsed command-line arguments
                                        specific to the sniffer module.
         Returns:
-            bool: True if the module executed successfully, False otherwise.
+            None: True if the module executed successfully, False otherwise.
         """
         sniff_kwargs = {
             'iface': self.iface,
@@ -113,7 +113,10 @@ class Sniffer(BaseModule):
         if args.pcap:
             wrpcap(args.pcap, pkts)
         
-        msg = f"Total amount of packets captured -> {len(pkts)} Packet(s)"
+        msg = (
+            f"Total amount of packets captured -> {len(pkts)} "
+            f"{'Packet' if len(pkts) == 1 else 'Packets'}"
+        )
         self.output.info(msg)
 
     def validate_args(self, args: argparse.Namespace) -> bool:

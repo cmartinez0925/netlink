@@ -11,6 +11,7 @@ DNS activity and detect anomalous behavior.
 
 import argparse
 
+from functools import partial
 from scapy.all import sniff
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import IP, UDP, TCP
@@ -46,6 +47,7 @@ class DNSAnalyzer(BaseModule):
         # Tracks how many times each domain has been queried.
         # Key is domain, Value is count
         self._query_log: dict[str, int] = dict() 
+        self._pkt_count: int = 0
 
     ############################################################################
     # Methods
@@ -102,16 +104,46 @@ class DNSAnalyzer(BaseModule):
 
     def run(self, args: argparse.Namespace) -> None:
         """
-        Executes the main functionality of the DNSAnalyzer module. This method 
+        Executes the main functionality of the DNSAnalyzer module. This method
         is called by the Engine when the user runs this module from the CLI.
+        It sets up the packet capture using Scapy's sniff() function with a
+        port 53 BPF filter to capture only DNS traffic. Uses functools.partial
+        to bind the parsed arguments to _process_packet so the query/response
+        filter flags are accessible during packet processing. After capturing
+        is complete, prints a summary of the top 5 most queried domains from
+        the internal query log.
         Args:
             args (argparse.Namespace): The parsed command-line arguments
-                                       specific to the sniffer module.
-        Returns:
-            bool: True if the module executed successfully, False otherwise.
+                                    specific to the DNSAnalyzer module.
         """
-        pass
+        prn = partial(self._process_packet, args=args)
+        
+        sniff_kwargs = {
+            'iface': self.iface,
+            'count': args.count,
+            'filter': 'port 53',
+            'prn': prn,
+            'timeout': args.timeout,
+        }
 
+        pkts = sniff(**sniff_kwargs)
+        msg = (
+            f"Total amount of queries captured -> {len(pkts)} "
+            f"{'Query' if len(pkts) == 1 else 'Queries'}"
+        )
+        self.output.info(msg)
+
+        top_5_queries = sorted(self._query_log.items(), 
+                               key=lambda item: item[1],
+                               reverse=True)[:5]
+        msg = "The top 5 queries are:"
+        self.output.info(msg)
+        for domain, value in top_5_queries:
+            msg = (
+                f"\t Domain: {domain} --> Amount Queried: {value}"
+            )
+            self.output.info(msg)
+     
     def validate_args(self, args: argparse.Namespace) -> bool:
         """
         Validates the provided arguments for the sniffer module. This method is
@@ -151,39 +183,55 @@ class DNSAnalyzer(BaseModule):
                                     to check query/response filter flags.
         """
         if DNS in pkt:
+            ####debug######
+            self._pkt_count +=1
+            self.output.info(f"[DEBUG] Layers: {pkt.summary()}")
+            ####debug######
+
+            if IP not in pkt:
+                # To defensively guard with MacOS BPF Quirks
+                return
+            
+            self.output.info(f"[DEBUG] IP layer found — processing packet")
             query_msg = None
             response_msg = None
 
             if pkt[DNS].qr == self.DNS_QUERY:
                 domain_name = pkt[DNS].qd.qname.decode()
                 src_ip = pkt[IP].src
-                self._query_log[domain_name] = self._query_log.get(domain_name, 0) + 1
+                self._query_log[domain_name] = self._query_log.get(
+                    domain_name, 0) + 1
                 query_amt = self._query_log[domain_name]
                 query_event = {
                     'event': 'query',
                     'src_ip': src_ip,
-                    'domain': domain_name,
+                    'domain_name': domain_name,
                     'count': query_amt,
                 }
                 query_msg = (
                     f"[QUERY] {src_ip} asked for {domain_name}. "
-                    f"(Seen {query_amt} {'time' if query_amt == 1 else 'times'}.)"
+                    f"(Seen {query_amt} "
+                    f"{'time' if query_amt == 1 else 'times'}.)"
                 )
                 self.output.record(query_event)
             elif pkt[DNS].qr == self.DNS_RESPONSE:
+                if pkt[DNS].an is None:
+                    # Guard in case there is no answer record
+                    return
                 domain_name = pkt[DNS].an.rrname.decode()
                 domain_addr = pkt[DNS].an.rdata #Decode not needed for A records
                 src_ip = pkt[IP].src
                 response_event = {
                     'event': 'response',
                     'src_ip': src_ip,
-                    'domain': domain_name,
+                    'domain_name': domain_name,
                     'resolved_to': domain_addr,
                 }
                 response_msg = (
                     f"[RESPONSE] {domain_name} resolved to {domain_addr}"
                 )
                 self.output.record(response_event)
+
             if args.queries_only and not args.responses_only:
                 # Display only queries
                 if query_msg:
