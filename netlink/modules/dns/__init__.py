@@ -15,6 +15,7 @@ from functools import partial
 from scapy.all import sniff
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import IP, UDP, TCP
+from scapy.layers.inet6 import IPv6
 from scapy.packet import Packet
 from netlink.core.base_module import BaseModule
 from netlink.core.output import OutputManager
@@ -47,7 +48,6 @@ class DNSAnalyzer(BaseModule):
         # Tracks how many times each domain has been queried.
         # Key is domain, Value is count
         self._query_log: dict[str, int] = dict() 
-        self._pkt_count: int = 0
 
     ############################################################################
     # Methods
@@ -183,22 +183,16 @@ class DNSAnalyzer(BaseModule):
                                     to check query/response filter flags.
         """
         if DNS in pkt:
-            ####debug######
-            self._pkt_count +=1
-            self.output.info(f"[DEBUG] Layers: {pkt.summary()}")
-            ####debug######
-
-            if IP not in pkt:
+            if IP not in pkt and IPv6 not in pkt:
                 # To defensively guard with MacOS BPF Quirks
                 return
             
-            self.output.info(f"[DEBUG] IP layer found — processing packet")
             query_msg = None
             response_msg = None
 
             if pkt[DNS].qr == self.DNS_QUERY:
                 domain_name = pkt[DNS].qd.qname.decode()
-                src_ip = pkt[IP].src
+                src_ip = pkt[IP].src if IP in pkt else pkt[IPv6].src
                 self._query_log[domain_name] = self._query_log.get(
                     domain_name, 0) + 1
                 query_amt = self._query_log[domain_name]
@@ -218,19 +212,22 @@ class DNSAnalyzer(BaseModule):
                 if pkt[DNS].an is None:
                     # Guard in case there is no answer record
                     return
-                domain_name = pkt[DNS].an.rrname.decode()
-                domain_addr = pkt[DNS].an.rdata #Decode not needed for A records
-                src_ip = pkt[IP].src
-                response_event = {
-                    'event': 'response',
-                    'src_ip': src_ip,
-                    'domain_name': domain_name,
-                    'resolved_to': domain_addr,
-                }
-                response_msg = (
-                    f"[RESPONSE] {domain_name} resolved to {domain_addr}"
-                )
-                self.output.record(response_event)
+                try:
+                    domain_name = pkt[DNS].an.rrname.decode()
+                    domain_addr = pkt[DNS].an.rdata #Decode not needed for A records
+                    src_ip = pkt[IP].src if IP in pkt else pkt[IPv6].src
+                    response_event = {
+                        'event': 'response',
+                        'src_ip': src_ip,
+                        'domain_name': domain_name,
+                        'resolved_to': domain_addr,
+                    }
+                    response_msg = (
+                        f"[RESPONSE] {domain_name} resolved to {domain_addr}"
+                    )
+                    self.output.record(response_event)
+                except Exception:
+                    return
 
             if args.queries_only and not args.responses_only:
                 # Display only queries
