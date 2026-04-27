@@ -47,7 +47,8 @@ class DNSAnalyzer(BaseModule):
 
         # Tracks how many times each domain has been queried.
         # Key is domain, Value is count
-        self._query_log: dict[str, int] = dict() 
+        self._query_log: dict[str, int] = dict()
+        self._pkt_count: int = 0
 
     ############################################################################
     # Methods
@@ -128,8 +129,8 @@ class DNSAnalyzer(BaseModule):
 
         pkts = sniff(**sniff_kwargs)
         msg = (
-            f"Total amount of queries captured -> {len(pkts)} "
-            f"{'Query' if len(pkts) == 1 else 'Queries'}"
+            f"Total amount of queries captured -> {self._pkt_count} "
+            f"{'Query' if self._pkt_count == 1 else 'Queries'}"
         )
         self.output.info(msg)
 
@@ -186,7 +187,7 @@ class DNSAnalyzer(BaseModule):
             if IP not in pkt and IPv6 not in pkt:
                 # To defensively guard with MacOS BPF Quirks
                 return
-            
+                        
             query_msg = None
             response_msg = None
 
@@ -214,7 +215,9 @@ class DNSAnalyzer(BaseModule):
                     return
                 try:
                     domain_name = pkt[DNS].an.rrname.decode()
-                    domain_addr = pkt[DNS].an.rdata #Decode not needed for A records
+                    
+                    #Decode not needed for A & AAAA records
+                    domain_addr = pkt[DNS].an.rdata 
                     src_ip = pkt[IP].src if IP in pkt else pkt[IPv6].src
                     response_event = {
                         'event': 'response',
@@ -228,6 +231,8 @@ class DNSAnalyzer(BaseModule):
                     self.output.record(response_event)
                 except Exception:
                     return
+
+            self._pkt_count += 1
 
             if args.queries_only and not args.responses_only:
                 # Display only queries
