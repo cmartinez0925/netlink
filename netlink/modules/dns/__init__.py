@@ -204,7 +204,7 @@ class DNSAnalyzer(BaseModule):
                     'count': query_amt,
                 }
                 query_msg = (
-                    f"[QUERY] {src_ip} asked for {domain_name}. "
+                    f"[QUERY] {src_ip} asked for {domain_name} "
                     f"(Seen {query_amt} "
                     f"{'time' if query_amt == 1 else 'times'}.)"
                 )
