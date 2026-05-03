@@ -17,7 +17,7 @@ import time
 from scapy.layers.inet import IP, TCP, UDP, ICMP
 from scapy.layers.dns import DNS, DNSQR
 from scapy.layers.l2 import Ether
-from scapy.packet import Packet
+from scapy.packet import Packet, Raw
 from scapy.all import send
 from netlink.core.base_module import BaseModule
 from netlink.core.output import OutputManager
@@ -31,6 +31,8 @@ class Crafter(BaseModule):
     NAME = "crafter"
     DESCRIPTION = "Send packets over the wire via the command line"
     REQUIRES_ROOT = True
+    LOWER_PORT = 1024
+    UPPER_PORT = 65535
 
 
     ############################################################################
@@ -228,7 +230,7 @@ class Crafter(BaseModule):
             self.output.warn(msg)
             return False
         elif args.packet_type in ('syn', 'udp'):
-            if args.port < 1 or args.port > 65535:
+            if args.port < 1 or args.port > self.UPPER_PORT:
                 msg = "Port must be between 1 and 65,535"
                 self.output.warn(msg)
                 return False
@@ -263,7 +265,7 @@ class Crafter(BaseModule):
                                     containing target, port, count, and
                                     interval.
         """
-        source_port = random.randint(1024, 65535)
+        source_port = random.randint(self.LOWER_PORT, self.UPPER_PORT)
         target_port = args.port
         target_ip = args.target
         pkt = IP(dst=target_ip)/TCP(sport=source_port, dport=target_port)
@@ -316,7 +318,25 @@ class Crafter(BaseModule):
                                     containing target, port, payload,
                                     count, and interval.
         """
-        pass
+        source_port = random.randint(self.LOWER_PORT, self.UPPER_PORT)
+        target_ip = args.target
+        target_port = args.port
+        pkt = IP(dst=target_ip)/UDP(sport=source_port, dport=target_port)/Raw(
+            load=args.payload)
+        counter = range(args.count) if args.count > 0 else itertools.count()
+
+        for _ in counter:
+            send(pkt, verbose=0)
+            self.output.success(f"UDP Packet sent to {target_ip}:{target_port}")
+            data = {
+                'packet_type': args.packet_type,
+                'source_port': source_port,
+                'target_ip': target_ip,
+                'target_port': target_port,
+                'payload': args.payload,
+            }
+            self.output.record(data)
+            time.sleep(args.interval)
 
     def _send_arp(self, args: argparse.Namespace) -> None:
         """
