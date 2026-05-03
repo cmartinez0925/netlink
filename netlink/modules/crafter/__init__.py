@@ -290,7 +290,21 @@ class Crafter(BaseModule):
             args (argparse.Namespace): The parsed command-line arguments
                                     containing target, count, and interval.
         """
-        pass
+        ECHO_REQUEST = 8
+        target_ip = args.target
+        pkt = IP(dst=target_ip)/ICMP(type=ECHO_REQUEST)
+        counter = range(args.count) if args.count > 0 else itertools.count()
+
+        for _ in counter:
+            send(pkt, verbose=0)
+            self.output.success(f"ICMP Request sent to {target_ip}")
+            data = {
+                'packet_type': args.packet_type,
+                'icmp_type': ECHO_REQUEST,
+                'target_ip': target_ip,
+            }
+            self.output.record(data)
+            time.sleep(args.interval)
 
     def _send_udp(self, args: argparse.Namespace) -> None:
         """
