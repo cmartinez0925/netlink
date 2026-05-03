@@ -16,14 +16,22 @@ import time
 
 from scapy.layers.inet import IP, TCP, UDP, ICMP
 from scapy.layers.dns import DNS, DNSQR
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import Ether, ARP
 from scapy.packet import Packet, Raw
-from scapy.all import send
+from scapy.all import send, sendp
 from netlink.core.base_module import BaseModule
 from netlink.core.output import OutputManager
 
 class Crafter(BaseModule):
     """
+    The Crafter class provides a command-line interface for building and 
+    sending custom network packets directly onto the wire. It supports five
+    packet types: TCP SYN for port probing and firewall testing, ICMP echo
+    requests for raw ping testing, UDP packets with custom payloads for 
+    service testing, ARP requests and replies for network testing, and DNS
+    queries for testing resolver behavior. Each packet type is dispatched
+    to its own dedicated send method which handles packet construction,
+    transmission, output, and interval timing between packets.
     """
     ############################################################################
     # Class Level Attributes
@@ -89,7 +97,7 @@ class Crafter(BaseModule):
         # Specific args for each packet_type
         subparsers = parser.add_subparsers(
             dest='packet_type',
-            metavar='PACKET TYPE',
+            metavar='PACKET_TYPE',
             help='Packet type to send'
         )
         
@@ -171,21 +179,12 @@ class Crafter(BaseModule):
         )
 
         dns_parser.add_argument(
-            '--query',
+            '--domain',
             type=str,
             action='store',
-            dest='query',
+            dest='domain',
             required=True,
             help='The domain to query'
-        )
-
-        dns_parser.add_argument(
-            '--server',
-            type=str,
-            action='store',
-            dest='server',
-            required=True,
-            help='The IP of the DNS server'
         )
  
 
@@ -212,6 +211,7 @@ class Crafter(BaseModule):
         
         handler = dispatch[args.packet_type]
         handler(args)
+        self.output.info(f"Crafter finished sending {args.packet_type} packets")
 
     def validate_args(self, args: argparse.Namespace) -> bool:
         """
@@ -237,7 +237,7 @@ class Crafter(BaseModule):
         elif args.packet_type == 'arp':
             # Make sure op is either 'request' or 'reply
             op = args.op.lower().strip()
-            if args.op not in ('request', 'reply'):
+            if op not in ('request', 'reply'):
                 msg = "Must specified 'request' or 'reply' for an ARP packet"
                 self.output.warn(msg)
                 return False
@@ -349,7 +349,35 @@ class Crafter(BaseModule):
                                     containing target, op, count, and
                                     interval.
         """
-        pass
+        ARP_REQUEST = 1
+        ARP_REPLY = 2
+        BROADCAST = "ff:ff:ff:ff:ff:ff"
+        
+        counter = range(args.count) if args.count > 0 else itertools.count()
+        msg = ''
+        op = ARP_REQUEST if args.op == 'request' else ARP_REPLY
+        target_ip = args.target
+
+        if op == ARP_REQUEST:
+            #who-has
+            pkt = Ether(dst=BROADCAST)/ARP(op=ARP_REQUEST,pdst=target_ip)
+            msg = f"Sent ARP Request for {target_ip}"
+        elif op == ARP_REPLY:
+            #i'm at
+            pkt = Ether(dst=BROADCAST)/ARP(op=ARP_REPLY, pdst=target_ip)
+            msg = f"Sent ARP Reply to {target_ip}"
+
+        for _ in counter:
+            sendp(pkt, verbose=0)
+            self.output.success(msg)
+            data = {
+                'packet_type': args.packet_type,
+                'ARP Type': op,
+                'target_ip': target_ip
+            }
+            self.output.record(data)
+            time.sleep(args.interval)        
+
 
     def _send_dns(self, args: argparse.Namespace) -> None:
         """
@@ -361,4 +389,28 @@ class Crafter(BaseModule):
                                     containing target, server, query,
                                     count, and interval.
         """
-        pass
+        DNS_PORT = 53
+        DNS_QUERY = 0
+
+        source_port = random.randint(self.LOWER_PORT, self.UPPER_PORT)
+        domain = args.domain
+        server = args.target
+        question_record = DNSQR(qname=domain, qtype='A')
+        counter = range(args.count) if args.count > 0 else itertools.count()
+
+        pkt = IP(dst=server)/UDP(sport=source_port, dport=DNS_PORT)
+        pkt = pkt/DNS(qr=DNS_QUERY, rd=1, qd=question_record)
+
+        for _ in counter:
+            send(pkt, verbose=0)
+            self.output.success(f"Sent DNS Query for {domain} to {server}")
+            data = {
+                'packet_type': args.packet_type,
+                'dns_type': DNS_QUERY,
+                'protocol': 'UDP',
+                'dns_port': DNS_PORT,
+                'domain': domain,
+                'server': server,
+            }
+            self.output.record(data)
+            time.sleep(args.interval)

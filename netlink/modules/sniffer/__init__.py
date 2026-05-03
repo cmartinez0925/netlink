@@ -14,6 +14,7 @@ from scapy.layers.inet import IP, TCP, UDP, ICMP
 from scapy.layers.l2 import ARP
 from scapy.packet import Packet
 from netlink.core.base_module import BaseModule
+from netlink.core.output import OutputManager
 
 class Sniffer(BaseModule):
     """
@@ -30,7 +31,8 @@ class Sniffer(BaseModule):
     ############################################################################
     # Constructor
     ############################################################################
-    # No need, already inherited by BaseModule
+    def __init__(self, iface: str, output: OutputManager):
+        super().__init__(iface, output)
 
     ############################################################################
     # Methods
