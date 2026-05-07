@@ -60,14 +60,24 @@ class Engine:
         for mod_info in mods_iter:
             # Import the module and inspect its classes 
             mod_path = f"netlink.modules.{mod_info.name}"
-            mod = importlib.import_module(mod_path)
+
+            # If import failes, print error and skip
+            try:
+                mod = importlib.import_module(mod_path)
+            except Exception as e:
+                err_msg = f"Failed to load module {mod_path}: {e}"
+                self.output_manager.error(err_msg)
+                continue
+
             mod_classes = inspect.getmembers(mod, inspect.isclass)
 
             # Check each class in the module to see if it is a subclass
             # of BaseModule (but not BaseModule itself) and add it to 
             # the modules dictionary
             for _, cls in mod_classes:
-                if issubclass(cls, BaseModule) and cls is not BaseModule:
+                if (issubclass(cls, BaseModule)
+                    and cls is not BaseModule
+                    and cls.NAME):
                     if cls.NAME in self.modules:
                         # If a module with the same name already exists,
                         # log an error and skip adding this module to
