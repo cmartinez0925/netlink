@@ -15,6 +15,7 @@ import sys
 
 from scapy.all import conf
 from scapy.all import get_if_list
+from scapy.all import IFACES
 
 class InterfaceManager:
     """
@@ -24,9 +25,9 @@ class InterfaceManager:
     properly configured and available for use.
     """
 
-    ####################################################################
+    ############################################################################
     # Static Methods
-    ####################################################################
+    ############################################################################
     @staticmethod
     def require_root(module_name: str) -> None:
         """
@@ -73,7 +74,7 @@ class InterfaceManager:
             sys.stderr.write(err_msg)
             sys.stderr.flush()
             sys.exit(1)      
-        elif iface is None:
+        else:
             # Try to get default iface from scapy conf
             if conf.iface:
                 return str(conf.iface)
@@ -97,4 +98,20 @@ class InterfaceManager:
             list[dict]: A list of dictionaries, each containing the name
                         of an available network interface.
         """
-        return [{"name": iface} for iface in get_if_list()]
+        interfaces = []
+
+        for name, iface in IFACES.items():
+            ipv4 = getattr(iface, 'ip', None) or "N/A"
+            ipv6 = getattr(iface, 'ipv6', None) or "N/A"
+            mac = getattr(iface, 'mac', None) or "N/A"
+
+            data = {
+                'name': name,
+                'ipv4': ipv4,
+                'ipv6': ipv6,
+                'mac': mac,
+            }
+
+            interfaces.append(data)
+
+        return interfaces

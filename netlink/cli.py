@@ -101,8 +101,20 @@ def main():
     if args.list_ifaces:
         iface_list = InterfaceManager.list_interfaces()
         engine.output_manager.header("Available Network Interfaces")
+        title_line = (
+            f"{"Name":<16} {"IPv4":<18} "
+            f"{"IPv6":<42} MAC"   
+        )
+        print(title_line)
+        print('-' * 96)
+            
         for iface in iface_list:
-            engine.output_manager.info(iface['name'])
+            msg = (
+                f"{iface['name']:<16} {iface['ipv4']:<18} "
+                f"{iface['ipv6']:<42} {iface['mac']}"     
+            )
+            print(msg)
+        print()
         sys.exit(0)
 
     # Handle no module specified case

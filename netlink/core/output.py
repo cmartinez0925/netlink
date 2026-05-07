@@ -20,9 +20,9 @@ class OutputManager:
     logging functionality.
     """
 
-    ####################################################################
+    ############################################################################
     # Constructor
-    ####################################################################
+    ############################################################################
     def __init__(self, json_mode: bool=False, outfile: str|None=None):
         """
         Initializes OutputManager with the specified output settings.
@@ -32,7 +32,7 @@ class OutputManager:
                            file instead of the console.
         """
         self.json_mode = json_mode
-        self.console = Console()
+        self.console = Console() 
         self._results: list = []
 
         if outfile is not None:
@@ -40,21 +40,24 @@ class OutputManager:
         else:
             self.outfile = None #type: ignore
 
-    ####################################################################
+    ############################################################################
     # Destructor
-    ####################################################################
+    ############################################################################
     def __del__(self):
         """
         Destructor for the OutputManager class. If an output file was
         specified, this method will close the file when the 
         OutputManager instance is destroyed.
         """
-        if self.outfile is not None:
-            self.outfile.close()
+        if hasattr(self, 'outfile') and self.outfile is not None:
+            try:
+                self.outfile.close()
+            except Exception:
+                pass
 
-    ####################################################################
+    ############################################################################
     # Methods
-    ####################################################################
+    ############################################################################
     def header(self, msg: str) -> None:
         """
         Displays a header message in the console.
@@ -124,4 +127,14 @@ class OutputManager:
 
         if self.outfile is not None:
             self.outfile.write(json_data + '\n')
-        
+    
+    def flush(self) -> None:
+        """
+        Flushes the output file buffer to disk if an output file is open. Useful
+        for ensuring results are written during long-running sessions.
+        """
+        if self.outfile is not None:
+            try:
+                self.outfile.flush()
+            except Exception:
+                pass
