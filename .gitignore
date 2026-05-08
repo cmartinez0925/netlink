@@ -12,9 +12,14 @@ wheels/
 # netlink output files
 *.json
 *.jsonl
+results*
 
 # macOS
 .DS_Store
 
 # uv
 uv.lock
+
+# mypy
+.mypy_cache/
+mypy.ini

@@ -10,9 +10,12 @@ the local network.
 """
 
 import argparse
+import ipaddress
+import random
 
 from scapy.layers.l2 import Ether, ARP
-from scapy.all import srp
+from scapy.layers.inet import IP, TCP, ICMP
+from scapy.all import sr, srp
 from netlink.core.base_module import BaseModule
 from netlink.core.output import OutputManager
 
@@ -27,6 +30,9 @@ class Discovery(BaseModule):
     NAME: str = "discovery"
     DESCRIPTION: str = "Discover live hosts on the network via ARP Sweep"
     REQUIRES_ROOT: bool = True
+    LOWER_PORT = 1024
+    UPPER_PORT = 65535
+    BROADCAST = 'ff:ff:ff:ff:ff:ff'
 
     ############################################################################
     # Constructor
@@ -73,29 +79,43 @@ class Discovery(BaseModule):
             help="Timeout in seconds to wait for responses (default: 2)"
         )
 
+        parser.add_argument(
+            '--method',
+            type=str,
+            choices=['arp', 'icmp', 'syn'],
+            dest='method',
+            default='arp',
+            help="Discover method: arp, imcp, syn (default=arp)"
+        )
+
+        parser.add_argument(
+            '--record-all',
+            action='store_true',
+            dest='record_all',
+            default=False,
+            help="Record all host including non-responding (default: False)"
+        )
+
     def run(self, args: argparse.Namespace) -> None:
         """
-        Executes the main logic of the Discovery module. It sends ARP requests
-        to the specified target IP range and listens for responses to identify
-        active hosts on the network.
+        Executes the main logic of the Discovery module. Dispatches to the
+        appropriate discovery method based on the --method argument. Supports
+        three discovery modes: ARP sweep for local subnet discovery, ICMP ping
+        for remote subnet discovery, and TCP SYN ping as a reliable fallback
+        when ICMP is blocked by firewalls.
         Args:
-            args (argparse.Namespace):  Parsed command-line arguments specific
-                                        to the Discovery module.
+            args (argparse.Namespace): Parsed command-line arguments specific
+                                    to the Discovery module.
         """
-        hosts_alive = 0
-        pkt = Ether(dst='ff:ff:ff:ff:ff:ff')/ARP(pdst=args.target)
-        answered, _ = srp(
-            pkt, iface=self.iface, timeout=args.timeout, verbose=0)
-        
-        for _, pkt_received in answered:
-            ip_addr = pkt_received[ARP].psrc
-            mac_addr = pkt_received[Ether].src
-            msg = f"{ip_addr}:{mac_addr} is alive"
-            self.output.success(msg)
-            self.output.record({'ip': ip_addr, 'mac': mac_addr})
-            hosts_alive += 1
-        
-        self.output.info(f"There are {hosts_alive} hosts alive")
+        method_selected = args.method
+
+        if method_selected == 'arp':
+            self._arp_sweep(args)
+        elif method_selected == 'icmp':
+            self._icmp_ping(args)
+        elif method_selected == 'syn':
+            self._syn_ping(args)
+
 
     def validate_args(self, args: argparse.Namespace) -> bool:
         """
@@ -109,8 +129,166 @@ class Discovery(BaseModule):
         Returns:
             bool: True if the arguments are valid, False otherwise.
         """
-        if args.target:
-            return True
-        self.output.warn("Please provide a target")
-        return False
+        try:
+            ipaddress.ip_network(args.target, strict=False)
+        except Exception:
+            msg = "Please provide a valid IPv4 or IPv6 Address"
+            self.output.error(msg)
+            return False
         
+        return True
+    
+    def _arp_sweep(self, args: argparse.Namespace) -> None:
+        """
+        Performs an ARP sweep on the specified target network to discover live
+        hosts. Sends ARP requests to every IP in the target range and collects
+        replies. Only works on local subnets since ARP does not cross routers.
+        Displays the IP and MAC address of each responding host.
+        Args:
+            args (argparse.Namespace): Parsed command-line arguments containing
+                                    target and timeout.
+        """
+        hosts_alive = 0
+        target_ip = None
+        target_mac = None
+
+        pkt = Ether(dst=self.BROADCAST)/ARP(pdst=args.target)
+        answered, unanswered = srp(
+            pkt, iface=self.iface, timeout=args.timeout, verbose=0)
+        
+        for _, pkt_received in answered:
+            if pkt_received.haslayer(ARP):
+                target_ip = pkt_received[ARP].psrc
+            else:
+                target_ip = 'unknown'
+
+            if pkt_received.haslayer(Ether):
+                target_mac = pkt_received[Ether].src
+            else:
+                target_mac = 'unknown'
+
+            data = {
+                'target_ip': target_ip,
+                'method': 'arp',
+                'host_status': 'alive',
+            }
+
+            msg = f"{target_ip} at {target_mac} is alive"
+
+            self.output.success(msg)
+            self.output.record(data)
+
+            hosts_alive += 1
+        
+        if args.record_all:
+            for pkt_sent, in unanswered:
+                data = {
+                    'target_ip': pkt_sent[ARP].pdst,
+                    'method': 'arp',
+                    'host_status': 'no_response',
+                }
+
+                self.output.record(data)
+        
+        self.output.info(f"There are {hosts_alive} hosts alive")
+
+    def _icmp_ping(self, args: argparse.Namespace) -> None:
+        """
+        Performs ICMP echo request discovery on the specified target network.
+        Expands the CIDR range using the ipaddress module and sends an ICMP
+        echo request to each host. A response indicates the host is alive.
+        Works across routers but may be blocked by firewalls. Displays the IP
+        address of each responding host.
+        Args:
+            args (argparse.Namespace): Parsed command-line arguments containing
+                                    target and timeout.
+        """
+        ECHO_REQUEST = 8
+        hosts_alive = 0
+        target_ip = None
+        network = ipaddress.ip_network(args.target, strict=False).hosts()
+        pkts = [IP(dst=str(host))/ICMP(type=ECHO_REQUEST) for host in network]
+
+        answered, unanswered = sr(pkts, timeout=args.timeout, verbose=0)
+
+        for _, pkt_received in answered:
+            if pkt_received.haslayer(IP):
+                target_ip = pkt_received[IP].src
+            else:
+                target_ip = "N/A"
+
+            data = {
+                'target_ip': target_ip,
+                'method': 'icmp',
+                'host_status': 'alive',
+            }
+
+            msg = f"{target_ip} is alive"
+            self.output.info(msg)
+            self.output.record(data)
+            hosts_alive += 1
+
+        if args.record_all:
+            for pkt_sent in unanswered:
+                data = {
+                    'target_ip': pkt_sent[IP].dst,
+                    'method': 'icmp',
+                    'host_status': 'no_response',
+                }
+            
+                self.output.record(data)
+        
+        self.output.info(f"There are {hosts_alive} hosts alive")
+
+
+    def _syn_ping(self, args: argparse.Namespace) -> None:
+        """
+        Performs TCP SYN ping discovery on the specified target network.
+        Expands the CIDR range using the ipaddress module and sends a TCP SYN
+        packet to port 80 of each host. A SYN-ACK or RST response indicates
+        the host is alive regardless of whether the port is open or closed.
+        More reliable than ICMP when firewalls block echo requests.
+        Args:
+            args (argparse.Namespace): Parsed command-line arguments containing
+                                    target and timeout.
+        """
+        TARGET_PORT = 80 #HTTP
+        hosts_alive = 0
+        source_port = random.randint(self.LOWER_PORT, self.UPPER_PORT)
+        target_ip = None
+        network = ipaddress.ip_network(args.target, strict=False).hosts()
+        pkts = [
+            IP(dst=str(host))/TCP(sport=source_port, dport=TARGET_PORT) 
+            for host in network
+        ]
+
+        answered, unanswered = sr(pkts, timeout=args.timeout, verbose=0)
+
+        for _, pkt_received in answered:
+            if pkt_received.haslayer(IP):
+                target_ip = pkt_received[IP].src
+            else:
+                target_ip = "N/A"
+                        
+            data = {
+                'target_ip': target_ip,
+                'method': 'syn',
+                'host_status': 'alive',
+            }
+
+            msg = f"{target_ip} is alive"
+            self.output.info(msg)
+            self.output.record(data)
+            hosts_alive += 1
+        
+        if args.record_all:
+            for pkt_sent in unanswered:
+                data = {
+                    'target_ip': pkt_sent[IP].dst,
+                    'method': 'syn',
+                    'host_status': 'no_response',
+                }
+
+                self.output.record(data)
+        
+        self.output.info(f"There are {hosts_alive} hosts alive")
