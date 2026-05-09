@@ -12,6 +12,7 @@ the local network.
 import argparse
 import ipaddress
 import random
+import logging
 
 from scapy.layers.l2 import Ether, ARP
 from scapy.layers.inet import IP, TCP, ICMP
@@ -203,6 +204,10 @@ class Discovery(BaseModule):
             args (argparse.Namespace): Parsed command-line arguments containing
                                     target and timeout.
         """
+        # So MAC Broadcast warning don't appear, excessive on linux
+        # Will need to readdress this later
+        logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
         ECHO_REQUEST = 8
         hosts_alive = 0
         target_ip = None
@@ -252,6 +257,10 @@ class Discovery(BaseModule):
             args (argparse.Namespace): Parsed command-line arguments containing
                                     target and timeout.
         """
+        # So MAC Broadcast warning don't appear, excessive on linux
+        # Will need to readdress this later
+        logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
         TARGET_PORT = 80 #HTTP
         hosts_alive = 0
         source_port = random.randint(self.LOWER_PORT, self.UPPER_PORT)
