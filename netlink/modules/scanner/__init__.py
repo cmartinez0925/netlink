@@ -10,6 +10,7 @@ module can be used to quickly assess the attack surface of a host by identifying
 which services are running and potentially vulnerable.
 """
 import argparse
+import ipaddress
 import random
 
 from scapy.layers.inet import IP, TCP
@@ -29,6 +30,100 @@ class Scanner(BaseModule):
     NAME = "scanner"
     DESCRIPTION = "SYN port scanner"
     REQUIRES_ROOT = True   
+
+    SERVICES = {
+        20: "FTP-DATA",
+        21: "FTP",
+        22: "SSH",
+        23: "TELNET",
+        25: "SMTP",
+        53: "DNS",
+        67: "DHCP",
+        68: "DHCP",
+        69: "TFTP",
+        80: "HTTP",
+        88: "KERBEROS",
+        110: "POP3",
+        111: "RPCBIND",
+        119: "NNTP",
+        123: "NTP",
+        135: "MSRPC",
+        137: "NETBIOS-NS",
+        138: "NETBIOS-DGM",
+        139: "NETBIOS-SSN",
+        143: "IMAP",
+        161: "SNMP",
+        162: "SNMP-TRAP",
+        179: "BGP",
+        194: "IRC",
+        389: "LDAP",
+        443: "HTTPS",
+        445: "SMB",
+        464: "KERBEROS-PW",
+        465: "SMTPS",
+        500: "ISAKMP",
+        512: "REXEC",
+        513: "RLOGIN",
+        514: "SYSLOG",
+        515: "LPD",
+        520: "RIP",
+        587: "SMTP-SUBMISSION",
+        631: "IPP",
+        636: "LDAPS",
+        666: "DOOM",
+        873: "RSYNC",
+        902: "VMWARE",
+        989: "FTPS-DATA",
+        990: "FTPS",
+        993: "IMAPS",
+        995: "POP3S",
+        1080: "SOCKS",
+        1194: "OPENVPN",
+        1433: "MSSQL",
+        1434: "MSSQL-MONITOR",
+        1521: "ORACLE",
+        1723: "PPTP",
+        1883: "MQTT",
+        2049: "NFS",
+        2121: "FTP-ALT",
+        2181: "ZOOKEEPER",
+        2375: "DOCKER",
+        2376: "DOCKER-TLS",
+        3000: "DEV-SERVER",
+        3306: "MYSQL",
+        3389: "RDP",
+        3690: "SVN",
+        4443: "HTTPS-ALT",
+        4444: "METASPLOIT",
+        4505: "SALT-MASTER",
+        4506: "SALT-MASTER",
+        5000: "FLASK",
+        5432: "POSTGRESQL",
+        5900: "VNC",
+        5985: "WINRM-HTTP",
+        5986: "WINRM-HTTPS",
+        6379: "REDIS",
+        6443: "KUBERNETES",
+        6666: "IRC-ALT",
+        7001: "WEBLOGIC",
+        8000: "HTTP-ALT",
+        8008: "HTTP-ALT",
+        8080: "HTTP-PROXY",
+        8443: "HTTPS-ALT",
+        8888: "JUPYTER",
+        9000: "SONARQUBE",
+        9090: "PROMETHEUS",
+        9200: "ELASTICSEARCH",
+        9300: "ELASTICSEARCH",
+        9418: "GIT",
+        10000: "WEBMIN",
+        11211: "MEMCACHED",
+        27017: "MONGODB",
+        27018: "MONGODB",
+        50000: "DB2",
+        50070: "HADOOP",
+        61616: "ACTIVEMQ",
+    }
 
     ############################################################################
     # Constructor
@@ -62,7 +157,7 @@ class Scanner(BaseModule):
             dest='target',
             required=True,
             help=(
-                "Target IP range to scan (e.g., 192.168.1.1)"
+                "Target IP range to scan (e.g., 192.168.1.1/24)"
             )
         )
 
@@ -99,6 +194,8 @@ class Scanner(BaseModule):
 
         ports = self.parse_ports(args.ports)
         ports_open = 0
+
+        network = ipaddress.ip_network(args.target, strict=False).hosts()
 
         for port in ports:
             my_port = random.randint(1024, 65535)
