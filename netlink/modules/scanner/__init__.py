@@ -11,10 +11,11 @@ which services are running and potentially vulnerable.
 """
 import argparse
 import ipaddress
+import logging
 import random
 
-from scapy.layers.inet import IP, TCP
 from scapy.all import sr1, send
+from scapy.layers.inet import IP, TCP
 from netlink.core.base_module import BaseModule
 from netlink.core.output import OutputManager
 
@@ -202,63 +203,77 @@ class Scanner(BaseModule):
         LOWER_PORT = 1024
         UPPER_PORT = 65535
 
+        # So MAC Broadcast warning don't appear, excessive on linux
+        # Will need to readdress this later
+        logging.getLogger("scapy.runtime").setLevel(logging.ERROR)     
+
         network = ipaddress.ip_network(args.target, strict=False).hosts()
         ports = self.parse_ports(args.ports)
+        host_os = 'Unknown'
 
         for host in network:
-            host = str(host)
+            host = str(host) #type: ignore
             ports_open = 0
 
             for port in ports:
                 my_port = random.randint(LOWER_PORT, UPPER_PORT)
                 pkt = IP(dst=host)/TCP(sport=my_port, dport=port, flags='S')
                 response = sr1(pkt, timeout=args.timeout, verbose=0)
+                service = self.SERVICES.get(port, 'Unknown')
 
                 if response is None:
                     if args.verbose:
                         data = {
                             'host': host,
                             'port': port,
+                            'service': service,
                             'status': 'filtered',
+                            'host_os': host_os,
                         }
-                        msg = f"{host}:{port} is filtered"
+                        msg = f"{host}:{port} is filtered ({service})"
                         self.output.info(msg)
                         self.output.record(data)
                     continue
 
                 if response.haslayer(IP):
                     ttl = response[IP].ttl
-                    os = self._guess_os(ttl)
+                    host_os = self._guess_os(ttl)
                     
-                # IF REPONSE HAS LAYER IP
-                    #   CHECK TTL TO DETERMINE OS VIA _guess_os()
-                        #TTL 64 == LINUX/MAC/BSD
-                        #TTL 128 == WINDOWS
-                        #TTL 255 == NETWORK DEVICE
-                        #ELSE == UNKNOWN
+                if response.haslayer(TCP):
+                    if response[TCP].flags == SYN_ACK:
+                        # PORT IS OPEN
+                        data = {
+                            'host': host,
+                            'port': port,
+                            'service': service,
+                            'status': 'open',
+                            'host_os': host_os,
+                        }
+                        msg = f"{host}:{port} is open ({service})"
+                        self.output.success(msg)
+                        self.output.record(data)
+                        ports_open += 1
 
-                # IF REPSONSE HAS LAYER TCP
-                    # THEN  BELOW IS FINE
-                    # NEED TO HIDE WARNING, THAT IS HAPPENING FOR 
-                    # IP ADDRS NOT ALLOCATED TO DEVICE YET OR 
-                    # ON THE NETWORK
-                    # WILL NEED TO HIDE VIA LOGGER LIKE OTHER MODULES
-                if response[TCP].flags == SYN_ACK:
-                    # Port is open
-                    ip_addr = response[IP].src
-                    msg = f"{ip_addr}:{port} is open"
-                    pkt = IP(dst=ip_addr)/TCP(sport=my_port, dport=port, flags='R')
-                    send(pkt, verbose=0)
-                    self.output.success(msg)
-                    self.output.record({'ip': args.target, 'port': port})
-                    ports_open += 1
-                elif response[TCP].flags == RST_ACK:
-                    # Port is closed
-                    # IF VERSBOSE
-                        # ADD MESSAGE THAT PORT IS CLOSED
-                    continue
+                        # Properly close down connection
+                        pkt = IP(dst=host)/TCP(
+                            sport=my_port, dport=port, flags='R')
+                        send(pkt, verbose=0)
+                    elif response[TCP].flags == RST_ACK:
+                        # PORT IS CLOSED
+                        if args.verbose:
+                            data = {
+                                'host': host,
+                                'port': port,
+                                'service': service,
+                                'status': 'closed',
+                                'host_os': host_os,
+                            }
+                            msg = f"{host}:{port} is closed ({service})"
+                            self.output.info(msg)
+                            self.output.record(data)
+                        continue
 
-            self.output.info(f"{host} has {ports_open} ports open")       
+            self.output.info(f"{host} has {ports_open} ports open\n")       
 
     @staticmethod
     def parse_ports(ports_str: str) -> list[int]:
@@ -311,7 +326,30 @@ class Scanner(BaseModule):
     
     def _guess_os(self, ttl: int) -> str:
         """
-        
+        Attempts to identify the operating system of a host based on the
+        Time To Live (TTL) value from an IP response packet. Different
+        operating systems use different default TTL values when sending
+        packets. This is a heuristic guess and not guaranteed to be accurate
+        as TTL values decrease with each network hop and can be modified.
+        Args:
+            ttl (int): The TTL value extracted from the IP layer of a
+                    response packet.
+        Returns:
+            str: A string representing the likely operating system based
+                on the TTL value. Possible values are 'Linux/Unix/Mac',
+                'Windows', 'Network Device', or 'Unknown'.
         """
-        pass
+        LINUX_UNIX_MAC = 64
+        WINDOWS = 128
+        NETWORK_DEVICE = 255
+
+        if ttl == LINUX_UNIX_MAC:
+            host_os = 'Linux/Unix/Mac'
+        elif ttl == WINDOWS:
+            host_os = 'Windows'
+        elif ttl == NETWORK_DEVICE:
+            host_os = 'Network Device' 
+        else:
+            host_os = 'Unknown'
+        return host_os
     
