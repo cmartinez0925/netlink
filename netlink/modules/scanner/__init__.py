@@ -178,7 +178,15 @@ class Scanner(BaseModule):
             dest='ports',
             default='1-1024',
             help="Ports to scan (e.g., 1-1024 or 80, 443) (default: 1-1024)"
-        )    
+        )
+
+        parser.add_argument(
+            '--verbose',
+            action='store_true',
+            dest='verbose',
+            default=False,
+            help="Dipslays if port is filtered or closed",
+        )
 
     def run(self, args: argparse.Namespace) -> None:
         """
@@ -191,35 +199,66 @@ class Scanner(BaseModule):
         """
         SYN_ACK = 0x12
         RST_ACK = 0x14
-
-        ports = self.parse_ports(args.ports)
-        ports_open = 0
+        LOWER_PORT = 1024
+        UPPER_PORT = 65535
 
         network = ipaddress.ip_network(args.target, strict=False).hosts()
+        ports = self.parse_ports(args.ports)
 
-        for port in ports:
-            my_port = random.randint(1024, 65535)
-            pkt = IP(dst=args.target)/TCP(sport=my_port, dport=port, flags='S')
-            response = sr1(pkt, timeout=args.timeout, verbose=0)
+        for host in network:
+            host = str(host)
+            ports_open = 0
 
-            # Access the response to determine if port is open
-            if response is None:
-                # Port is filtered or dropped
-                continue
-            elif response[TCP].flags == SYN_ACK:
-                # Port is open
-                ip_addr = response[IP].src
-                msg = f"{ip_addr}:{port} is open"
-                pkt = IP(dst=ip_addr)/TCP(sport=my_port, dport=port, flags='R')
-                send(pkt, verbose=0)
-                self.output.success(msg)
-                self.output.record({'ip': args.target, 'port': port})
-                ports_open += 1
-            elif response[TCP].flags == RST_ACK:
-                # Port is closed
-                continue
+            for port in ports:
+                my_port = random.randint(LOWER_PORT, UPPER_PORT)
+                pkt = IP(dst=host)/TCP(sport=my_port, dport=port, flags='S')
+                response = sr1(pkt, timeout=args.timeout, verbose=0)
 
-        self.output.info(f"{args.target} has {ports_open} ports open")       
+                if response is None:
+                    if args.verbose:
+                        data = {
+                            'host': host,
+                            'port': port,
+                            'status': 'filtered',
+                        }
+                        msg = f"{host}:{port} is filtered"
+                        self.output.info(msg)
+                        self.output.record(data)
+                    continue
+
+                if response.haslayer(IP):
+                    ttl = response[IP].ttl
+                    os = self._guess_os(ttl)
+                    
+                # IF REPONSE HAS LAYER IP
+                    #   CHECK TTL TO DETERMINE OS VIA _guess_os()
+                        #TTL 64 == LINUX/MAC/BSD
+                        #TTL 128 == WINDOWS
+                        #TTL 255 == NETWORK DEVICE
+                        #ELSE == UNKNOWN
+
+                # IF REPSONSE HAS LAYER TCP
+                    # THEN  BELOW IS FINE
+                    # NEED TO HIDE WARNING, THAT IS HAPPENING FOR 
+                    # IP ADDRS NOT ALLOCATED TO DEVICE YET OR 
+                    # ON THE NETWORK
+                    # WILL NEED TO HIDE VIA LOGGER LIKE OTHER MODULES
+                if response[TCP].flags == SYN_ACK:
+                    # Port is open
+                    ip_addr = response[IP].src
+                    msg = f"{ip_addr}:{port} is open"
+                    pkt = IP(dst=ip_addr)/TCP(sport=my_port, dport=port, flags='R')
+                    send(pkt, verbose=0)
+                    self.output.success(msg)
+                    self.output.record({'ip': args.target, 'port': port})
+                    ports_open += 1
+                elif response[TCP].flags == RST_ACK:
+                    # Port is closed
+                    # IF VERSBOSE
+                        # ADD MESSAGE THAT PORT IS CLOSED
+                    continue
+
+            self.output.info(f"{host} has {ports_open} ports open")       
 
     @staticmethod
     def parse_ports(ports_str: str) -> list[int]:
@@ -269,4 +308,10 @@ class Scanner(BaseModule):
             return False
 
         return True
+    
+    def _guess_os(self, ttl: int) -> str:
+        """
+        
+        """
+        pass
     
