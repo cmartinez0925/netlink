@@ -13,11 +13,15 @@ import argparse
 import ipaddress
 import logging
 import random
+import signal
 
 from scapy.all import sr1, send
 from scapy.layers.inet import IP, TCP
+from types import FrameType
+
 from netlink.core.base_module import BaseModule
 from netlink.core.output import OutputManager
+
 
 
 class Scanner(BaseModule):
@@ -131,6 +135,7 @@ class Scanner(BaseModule):
     ############################################################################
     def __init__(self, iface: str, output: OutputManager):
         super().__init__(iface, output)
+        self.keyboard_interrupted = False
 
     ############################################################################
     # Methods
@@ -210,70 +215,94 @@ class Scanner(BaseModule):
         network = ipaddress.ip_network(args.target, strict=False).hosts()
         ports = self.parse_ports(args.ports)
         host_os = 'Unknown'
+        ports_open = 0
+        
+        self.keyboard_interrupted = False
+        signal.signal(signal.SIGINT, self._sigint_handler)
+        
+        try:
+            for host in network:
+                if self.keyboard_interrupted:
+                    break
 
-        for host in network:
-            host = str(host) #type: ignore
-            ports_open = 0
+                host = str(host) #type: ignore
+                ports_open = 0
 
-            for port in ports:
-                my_port = random.randint(LOWER_PORT, UPPER_PORT)
-                pkt = IP(dst=host)/TCP(sport=my_port, dport=port, flags='S')
-                response = sr1(pkt, timeout=args.timeout, verbose=0)
-                service = self.SERVICES.get(port, 'Unknown')
+                for port in ports:
+                    if self.keyboard_interrupted:
+                        break
 
-                if response is None:
-                    if args.verbose:
-                        data = {
-                            'host': host,
-                            'port': port,
-                            'service': service,
-                            'status': 'filtered',
-                            'host_os': host_os,
-                        }
-                        msg = f"{host}:{port} is filtered ({service})"
-                        self.output.info(msg)
-                        self.output.record(data)
-                    continue
+                    my_port = random.randint(LOWER_PORT, UPPER_PORT)
+                    pkt = IP(dst=host)/TCP(sport=my_port, dport=port, flags='S')
+                    response = sr1(pkt, timeout=args.timeout, verbose=0)
+                    service = self.SERVICES.get(port, 'Unknown')
 
-                if response.haslayer(IP):
-                    ttl = response[IP].ttl
-                    host_os = self._guess_os(ttl)
-                    
-                if response.haslayer(TCP):
-                    if response[TCP].flags == SYN_ACK:
-                        # PORT IS OPEN
-                        data = {
-                            'host': host,
-                            'port': port,
-                            'service': service,
-                            'status': 'open',
-                            'host_os': host_os,
-                        }
-                        msg = f"{host}:{port} is open ({service})"
-                        self.output.success(msg)
-                        self.output.record(data)
-                        ports_open += 1
-
-                        # Properly close down connection
-                        pkt = IP(dst=host)/TCP(
-                            sport=my_port, dport=port, flags='R')
-                        send(pkt, verbose=0)
-                    elif response[TCP].flags == RST_ACK:
-                        # PORT IS CLOSED
+                    if response is None:
                         if args.verbose:
                             data = {
                                 'host': host,
                                 'port': port,
                                 'service': service,
-                                'status': 'closed',
+                                'status': 'filtered',
                                 'host_os': host_os,
                             }
-                            msg = f"{host}:{port} is closed ({service})"
+                            msg = f"{host}:{port} ({service}) is filtered"
                             self.output.info(msg)
                             self.output.record(data)
                         continue
 
-            self.output.info(f"{host} has {ports_open} ports open\n")       
+                    if response.haslayer(IP):
+                        ttl = response[IP].ttl
+                        host_os = self._guess_os(ttl)
+                        
+                    if response.haslayer(TCP):
+                        if response[TCP].flags == SYN_ACK:
+                            # PORT IS OPEN
+                            data = {
+                                'host': host,
+                                'port': port,
+                                'service': service,
+                                'status': 'open',
+                                'host_os': host_os,
+                            }
+                            msg = (
+                                f"{host}:{port} ({service}) is open "
+                                f"Host OS: [{host_os}]"
+                            )
+                            self.output.success(msg)
+                            self.output.record(data)
+                            ports_open += 1
+
+                            # Properly close down connection
+                            pkt = IP(dst=host)/TCP(
+                                sport=my_port, dport=port, flags='R')
+                            send(pkt, verbose=0)
+                        elif response[TCP].flags == RST_ACK:
+                            # PORT IS CLOSED
+                            if args.verbose:
+                                data = {
+                                    'host': host,
+                                    'port': port,
+                                    'service': service,
+                                    'status': 'closed',
+                                    'host_os': host_os,
+                                }
+                                msg = (
+                                    f"{host}:{port} ({service}) is closed "
+                                    f"Host OS: [{host_os}]"
+                                )
+                                self.output.info(msg)
+                                self.output.record(data)
+                            continue
+                
+                if not self.keyboard_interrupted:
+                    self.output.info(f"{host} has {ports_open} ports open\n")       
+        finally:
+            if self.keyboard_interrupted:
+                self.output.warn("KeyboardInterrupt: Scan ended by user")
+                self.output.info(f"{host} has {ports_open} ports open\n")  
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+
 
     @staticmethod
     def parse_ports(ports_str: str) -> list[int]:
@@ -353,3 +382,17 @@ class Scanner(BaseModule):
             host_os = 'Unknown'
         return host_os
     
+    def _sigint_handler(self, sig: int, frame: FrameType|None) -> None:
+        """
+        Handles the SIGINT signal (Ctrl+C) by setting the interrupted flag
+        to True. This allows the scanner to exit gracefully after the current
+        packet send/receive cycle completes rather than terminating abruptly
+        mid-scan.
+        Args:
+            sig (int): The signal number received. Will be signal.SIGINT (2)
+                    when triggered by Ctrl+C.
+            frame (FrameType | None): The current stack frame at the time the
+                                    signal was received. Not used but required
+                                    by the signal handler interface.
+        """
+        self.keyboard_interrupted = True
