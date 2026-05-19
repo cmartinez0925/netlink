@@ -40,7 +40,7 @@ class Sniffer(BaseModule):
     ############################################################################
     def __init__(self, iface: str, output: OutputManager):
         super().__init__(iface, output)
-        self._protocol_count: dict[str, int] = dict()
+        # self._protocol_count: dict[str, int] = dict()
 
     ############################################################################
     # Methods
@@ -155,10 +155,10 @@ class Sniffer(BaseModule):
             f"{'Packet' if len(pkts) == 1 else 'Packets'}"
         )
         self.output.info(msg)
-        self.output.info("Protocol Summary:")
-        for proto, count in sorted(self._protocol_count.items()):
-            packet_or_packets = 'packet' if count == 1 else 'packets'
-            self.output.info(f"  {proto:<12} {count} {packet_or_packets}")
+        # self.output.info("Protocol Summary:")
+        # for proto, count in sorted(self._protocol_count.items()):
+        #     packet_or_packets = 'packet' if count == 1 else 'packets'
+        #     self.output.info(f"  {proto:<12} {count} {packet_or_packets}")
 
     def validate_args(self, args: argparse.Namespace) -> bool:
         """
@@ -203,10 +203,11 @@ class Sniffer(BaseModule):
         terminal_printout = f"[Other] {pkt_size_print}"
 
         if pkt.haslayer(IP):
-            terminal_printout = self._inspect_ip(pkt, IP) #type: ignore
+            terminal_printout = self._inspect_ip(pkt, IP, args) #type: ignore
         elif pkt.haslayer(IPv6):
-            terminal_printout = self._inspect_ip(pkt, IPv6) #type: ignore
+            terminal_printout = self._inspect_ip(pkt, IPv6, args) #type: ignore
         elif pkt.haslayer(ARP):
+            #NO NEED FOR VERBOSE
             protocol = 'ARP'
             src_ip = pkt[ARP].psrc
             src_mac = pkt[ARP].hwsrc
@@ -225,7 +226,12 @@ class Sniffer(BaseModule):
                 f"[{protocol}] id={vlan_id} src={src_mac} --> dst={dst_mac} "
                 f"{pkt_size_print}"
             )
+
+            if args.verbose:
+                pass
+
         elif pkt.haslayer(STP):
+            #NO NEED FOR VERBOSE
             protocol = 'STP'
             proto = pkt[STP].proto
             version = pkt[STP].version
@@ -241,41 +247,87 @@ class Sniffer(BaseModule):
             'dst_port': dst_port,
             'pkt_size': PKT_SIZE
         }
-        
+
         self.output.info(terminal_printout)
         self.output.record(data)
     
-    def _inspect_ip(self, pkt: Packet, ip_version: IP|IPv6) -> str:
+    def _inspect_ip(self, pkt: Packet, ip_version: IP|IPv6, 
+                    args: argparse.Namespace) -> str:
         """
-        
+        Inspects an IP or IPv6 packet and extracts protocol information for
+        display. Determines the highest-level protocol present in the packet
+        by checking layers in order from most specific to most generic:
+        TLS → HTTP → DNS → DHCP → TCP → UDP → ICMP. Extracts source and
+        destination IP addresses, ports where applicable, and additional
+        protocol-specific fields for verbose output. Returns a formatted
+        one-line summary string for default output or an enriched multi-line
+        string when verbose mode is enabled.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
+            args (argparse.Namespace): The parsed command-line arguments used
+                                    to check verbose and deep_inspect flags.
+        Returns:
+            str: A formatted string containing the protocol, source and
+                destination addresses and ports, packet size, and optionally
+                additional protocol-specific fields when verbose is enabled.
         """
         PKT_SIZE = len(pkt)
 
         src_ip = None
         src_port = None
-        src_mac = None
-
         dst_ip = None
         dst_port = None
-        dst_mac = None
-        
         protocol = 'Other'
+
         pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
         terminal_printout = f"[Other] {pkt_size_print}"
+        additional_data = ''
 
         if pkt.haslayer(ip_version): #type: ignore
             protocol = 'IPv4' if ip_version == IP else 'IPv6'
             src_ip = pkt[ip_version].src #type: ignore
             dst_ip = pkt[ip_version].dst #type: ignore
+
             if pkt.haslayer(TLS):
                 protocol = 'TLS'
                 src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
                 dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
+                if args.verbose:
+                    tls_type = pkt[TLS].type
+                    tls_version = pkt[TLS].version
+                    additional_data = (
+                        f"\t<Additional_Data>\n"
+                        f"\tType: {tls_type}\n"
+                        f"\tVersion: {tls_version}"
+                    )
             elif pkt.haslayer(HTTP):
                 if pkt.haslayer(HTTPRequest):
                     protocol = 'HTTP Request'
+                    if args.verbose:
+                        method = pkt[HTTPRequest].Method
+                        path = pkt[HTTPRequest].Path
+                        http_version = pkt[HTTPRequest].Http_Version
+                        additional_data = (
+                            f"\t<Additional_Data>\n"
+                            f"\tMethod: {method}\n" 
+                            f"\tPath: {path}\n"
+                            f"\tVersion: {http_version}"
+                        )
                 elif pkt.haslayer(HTTPResponse):
                     protocol = 'HTTP Response'
+                    if args.verbose:
+                        http_version = pkt[HTTPResponse].Http_Version
+                        status_code = pkt[HTTPResponse].Status_Code
+                        content_length = pkt[HTTPResponse].Content_Length
+                        additional_data = (
+                            f"\t<Additional_Data>\n"
+                            f"\tVersion: {http_version}\n"
+                            f"\tStatus Code: {status_code}\n"
+                            f"\tContent Length: {content_length}"
+                        )
                 else:
                     protocol = 'HTTP'
                 src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
@@ -284,24 +336,147 @@ class Sniffer(BaseModule):
                 protocol = 'DNS'
                 src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
                 dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
+                if args.verbose:
+                    query_response = 'Query' if pkt[DNS].qr == 0 else 'Response'
+                    domain = pkt[DNS].qd.qname.decode() if pkt[DNS].qd else (
+                        pkt[DNS].an.rrname.decode() if pkt[DNS].an else 'N/A'
+                    )
+                    # resolve_addr = pkt[DNS].an.rdata if pkt[DNS].an else 'N/A'
+                    additional_data = (
+                        f"\t<Additional_Data>\n"
+                        f"\tQR: {query_response}\n"
+                        f"\tDomain: {domain}"
+                        # NEED TO FIX THIS
+                        # f"\tResolved_Address: {str(resolve_addr):<16}"
+                    )
             elif pkt.haslayer(DHCP):
                 protocol = 'DHCP'
                 src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
                 dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
+                if args.verbose:
+                    options = pkt[DHCP].options
+                    if options:
+                        options_str = ', '.join(
+                            str(opt) for opt in options if opt != 'end')
+                        additional_data = (
+                            f"\t<Additional_Data>\n"
+                            f"\tOptions: {options_str}"
+                        )
+                    else:
+                        additional_data = (
+                            f"\t<Additional_Data>\n"
+                            f"\tOptions: N/A"
+                        )
             elif pkt.haslayer(TCP):
                 protocol = 'TCP'
                 src_port = pkt[TCP].sport
                 dst_port = pkt[TCP].dport
+                if args.verbose:
+                    flag = str(pkt[TCP].flags)
+                    seq = pkt[TCP].seq
+                    ack = pkt[TCP].ack
+                    window = pkt[TCP].window
+                    chksum = pkt[TCP].chksum
+                    additional_data = (
+                        f"\t<Additional_Data>\n"
+                        f"\tFlags: {flag:<12} SEQ: {seq:<24}\n"
+                        f"\tACK: {ack:<12}   Window: {window:<24}\n"
+                        f"\tCHKSUM: {chksum}"
+                    )
             elif pkt.haslayer(UDP):
                 protocol = 'UDP'
                 src_port = pkt[UDP].sport
                 dst_port = pkt[UDP].dport
+                if args.verbose:
+                    length = pkt[UDP].len
+                    chksum = pkt[UDP].chksum
+                    additional_data = (
+                        f"\t<Additional_Data>\n"
+                        f"\tLEN: {length}\n"
+                        f"\tCHKSUM: {chksum}"
+                    )
             elif pkt.haslayer(ICMP):
                 protocol = 'ICMP'
+                if args.verbose:
+                    icmp_types = {
+                        0: 'Echo Reply',
+                        3: 'Destination Unreachable',
+                        4: 'Source Quench',
+                        5: 'Redirect',
+                        8: 'Echo Request',
+                        9: 'Router Advertisement',
+                        10: 'Router Solicitation',
+                        11: 'Time Exceeded',
+                        12: 'Parameter Problem',
+                        13: 'Timestamp Request',
+                        14: 'Timestamp Reply',
+                    }
 
-            terminal_printout = (
-                f"[{protocol}] {src_ip}:{src_port} --> {dst_ip}:{dst_port} "
-                f"{pkt_size_print}"
-            )
+                    icmp_codes = {
+                        3: {  # Destination Unreachable
+                            0: 'Net Unreachable',
+                            1: 'Host Unreachable',
+                            2: 'Protocol Unreachable',
+                            3: 'Port Unreachable',
+                            4: 'Fragmentation Needed',
+                            5: 'Source Route Failed',
+                            6: 'Destination Network Unknown',
+                            7: 'Destination Host Unknown',
+                            9: 'Network Administratively Prohibited',
+                            10: 'Host Administratively Prohibited',
+                            11: 'Network Unreachable for TOS',
+                            12: 'Host Unreachable for TOS',
+                            13: 'Communication Administratively Prohibited',
+                        },
+                        5: {  # Redirect
+                            0: 'Redirect for Network',
+                            1: 'Redirect for Host',
+                            2: 'Redirect for TOS and Network',
+                            3: 'Redirect for TOS and Host',
+                        },
+                        11: {  # Time Exceeded
+                            0: 'TTL Exceeded in Transit',
+                            1: 'Fragment Reassembly Time Exceeded',
+                        },
+                        12: {  # Parameter Problem
+                            0: 'Pointer Indicates Error',
+                            1: 'Missing Required Option',
+                            2: 'Bad Length',
+                        },
+                    }
+
+                    icmp_type = icmp_types.get(pkt[ICMP].type, 'Unknown')
+                    icmp_code = icmp_codes.get(
+                        pkt[ICMP].type, {}).get(
+                            pkt[ICMP].code, 'N/A')
+                    icmp_id = pkt[ICMP].id
+                    icmp_seq = pkt[ICMP].seq
+
+                    additional_data = (
+                        f"\t<Additional_Data>\n"
+                        f"\tType: {icmp_type}\n"
+                        f"\tCode: {icmp_code}\n"
+                        f"\tID: {icmp_id}\n"
+                        f"\tSEQ: {icmp_seq}"
+                    )
+                                      
+            if args.verbose:
+                terminal_printout = (
+                    f"[{protocol}] {src_ip}:{src_port} --> {dst_ip}:{dst_port} "
+                    f"{pkt_size_print}"
+                )
+                if additional_data:
+                    terminal_printout += f"\n{additional_data}"
+            else:
+                terminal_printout = (
+                    f"[{protocol}] {src_ip}:{src_port} --> {dst_ip}:{dst_port} "
+                    f"{pkt_size_print}"
+                )      
         
         return terminal_printout
+    
+
+#THINGS TO WORK ON
+    #DATA FOR RECORD, NEEDS TO INCLUDE THE ADDITIONAL DATA I PULLED
+    #PROTOCOL COUNT NEEDS TO START COUNTING TYPE OF PACKETS
+    #DEEP_INSPECT

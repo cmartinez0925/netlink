@@ -13,6 +13,7 @@ consistent manner across the framework.
 import json
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
 class OutputManager:
     """
@@ -79,6 +80,7 @@ class OutputManager:
             return
         self.console.print(f"[turquoise2][*][/turquoise2] {msg}", 
                            style="white")
+
 
     def success(self, msg: str) -> None:
         """
