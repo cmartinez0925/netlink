@@ -245,7 +245,7 @@ class Sniffer(BaseModule):
         dst_ip = None
         dst_port = None
         dst_mac = None
-        data = dict()
+        data: dict[str, Any] = dict()
         
         protocol = 'Other'
         pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
@@ -359,216 +359,19 @@ class Sniffer(BaseModule):
         additional_data = ''
 
         if pkt.haslayer(ip_version): #type: ignore
-            protocol = 'IPv4' if ip_version == IP else 'IPv6'
             src_ip = pkt[ip_version].src #type: ignore
             dst_ip = pkt[ip_version].dst #type: ignore
 
-            data = {
-                'protocol': protocol,
-                'src_ip': src_ip,
-                'dst_ip': dst_ip,
-                'dst_port': dst_port,
-            }
-
-            self._increase_count(protocol)
-
             if pkt.haslayer(TLS):
-                protocol = 'TLS'
-                src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
-                dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
-                tls_type = pkt[TLS].type
-                tls_version = pkt[TLS].version
-
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'src_port': src_port,
-                    'dst_ip': dst_ip,
-                    'dst_port': dst_port,
-                    'tls_type': tls_type,
-                    'tls_version': tls_version,
-                }
-
-                self._increase_count(protocol)
-
-                if args.verbose:
-                    additional_data = (
-                        f"\t<Additional_Data>\n"
-                        f"\tType: {tls_type}\n"
-                        f"\tVersion: {tls_version}"
-                    )
+                data, additional_data = self._parse_TLS(pkt, src_ip, dst_ip)
             elif pkt.haslayer(HTTP):
-                src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
-                dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
-
-                if pkt.haslayer(HTTPRequest):
-                    protocol = 'HTTP Request'
-                    method = pkt[HTTPRequest].Method.decode(
-                        'utf-8', errors='replace'
-                        ) if pkt[HTTPRequest].Method else 'N/A'
-                    path = pkt[HTTPRequest].Path.decode(
-                        'utf-8', errors='replace'
-                        ) if pkt[HTTPRequest].Path else 'N/A'
-                    http_version = pkt[HTTPRequest].Http_Version.decode(
-                        'utf-8', errors='replace'
-                        ) if pkt[HTTPRequest].Http_Version else 'N/A'
-
-                    data = {
-                        'protocol': protocol,
-                        'src_ip': src_ip,
-                        'src_port': src_port,
-                        'dst_ip': dst_ip,
-                        'dst_port': dst_port,
-                        'method': method,
-                        'path': path,
-                        'http_version': http_version,
-                    }
-
-                    self._increase_count(protocol)
-
-                    if args.verbose:
-                        additional_data = (
-                            f"\t<Additional_Data>\n"
-                            f"\tMethod: {method}\n" 
-                            f"\tPath: {path}\n"
-                            f"\tVersion: {http_version}"
-                        )
-                elif pkt.haslayer(HTTPResponse):
-                    protocol = 'HTTP Response'
-                    http_version = pkt[HTTPResponse].Http_Version.decode(
-                        'utf-8', errors='replace'
-                        ) if pkt[HTTPResponse].Http_Version else 'N/A'
-                    status_code = pkt[HTTPResponse].Status_Code.decode(
-                        'utf-8', errors='replace'
-                        ) if pkt[HTTPResponse].Status_Code else 'N/A'
-                    content_length = pkt[HTTPResponse].Content_Length.decode(
-                        'utf-8', errors='replace'
-                        ) if pkt[HTTPResponse].Content_Length else 'N/A'
-
-                    data = {
-                        'protocol': protocol,
-                        'src_ip': src_ip,
-                        'src_port': src_port,
-                        'dst_ip': dst_ip,
-                        'dst_port': dst_port,
-                        'http_version': http_version,
-                        'status_code': status_code,
-                        'content_length': content_length,
-                    }
-
-                    self._increase_count(protocol)
-
-                    if args.verbose:
-                        additional_data = (
-                            f"\t<Additional_Data>\n"
-                            f"\tVersion: {http_version}\n"
-                            f"\tStatus Code: {status_code}\n"
-                            f"\tContent Length: {content_length}"
-                        )
-                else:
-                    protocol = 'HTTP'
-
-                    data = {
-                        'protocol': protocol,
-                        'src_ip': src_ip,
-                        'src_port': src_port,
-                        'dst_ip': dst_ip,
-                        'dst_port': dst_port,
-                    }
-
-                    self._increase_count(protocol)
-
-                    if args.verbose:
-                        #NO NEED FOR VERBOSE AT THE MOMENT
-                        pass
+                data, additional_data = self._parse_HTTP(pkt, src_ip, dst_ip)
             elif pkt.haslayer(DNS):
-                protocol = 'DNS'
-                src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
-                dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
-                query_response = 'Query' if pkt[DNS].qr == 0 else 'Response'
-                domain = pkt[DNS].qd.qname.decode() if pkt[DNS].qd else (
-                    pkt[DNS].an.rrname.decode() if pkt[DNS].an else 'N/A'
-                )
-                # NEED TO FIX THIS
-                # resolve_addr = pkt[DNS].an.rdata if pkt[DNS].an else 'N/A'
-
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'src_port': src_port,
-                    'dst_ip': dst_ip,
-                    'dst_port': dst_port,
-                    'query_response': query_response,
-                    'domain': domain,
-                }
-
-                self._increase_count(protocol)
-
-                if args.verbose:
-                    additional_data = (
-                        f"\t<Additional_Data>\n"
-                        f"\tQR: {query_response}\n"
-                        f"\tDomain: {domain}"
-                    )
+                data, additional_data = self._parse_DNS(pkt, src_ip, dst_ip)
             elif pkt.haslayer(DHCP):
-                protocol = 'DHCP'
-                src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
-                dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
-                options = pkt[DHCP].options
-                if options:
-                    options_str = ', '.join(
-                        str(opt) for opt in options if opt != 'end')
-                else:
-                    options_str = 'N/A'
-
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'src_port': src_port,
-                    'dst_ip': dst_ip,
-                    'dst_port': dst_port,
-                    'options': options_str,
-                }
-
-                self._increase_count(protocol)
-
-                if args.verbose:
-                    additional_data = (
-                        f"\t<Additional_Data>\n"
-                        f"\tOptions: {options_str}"
-                    )
+                data, additional_data = self._parse_DHCP(pkt, src_ip, dst_ip)
             elif pkt.haslayer(TCP):
-                protocol = 'TCP'
-                src_port = pkt[TCP].sport
-                dst_port = pkt[TCP].dport
-                flag = str(pkt[TCP].flags)
-                seq = pkt[TCP].seq
-                ack = pkt[TCP].ack
-                window = pkt[TCP].window
-                chksum = pkt[TCP].chksum
-
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'src_port': src_port,
-                    'dst_ip': dst_ip,
-                    'dst_port': dst_port,
-                    'flag': flag,
-                    'seq': seq,
-                    'ack': ack,
-                    'window': window,
-                    'chksum': chksum,
-                }
-
-                self._increase_count(protocol)
-
-                if args.verbose:
-                    additional_data = (
-                        f"\t<Additional_Data>\n"
-                        f"\tFlags: {flag:<12} SEQ: {seq:<24}\n"
-                        f"\tACK: {ack:<12}   Window: {window:<24}\n"
-                        f"\tCHKSUM: {chksum}"
-                    )
+                data, additional_data = self._parse_TCP(pkt, src_ip, dst_ip)
             elif pkt.haslayer(UDP):
                 protocol = 'UDP'
                 src_port = pkt[UDP].sport
@@ -623,7 +426,20 @@ class Sniffer(BaseModule):
                         f"\tID: {icmp_id}\n"
                         f"\tSEQ: {icmp_seq}"
                     )
-                                      
+            else:    
+                protocol = 'IPv4' if ip_version == IP else 'IPv6'
+                data = {
+                    'protocol': protocol,
+                    'src_ip': src_ip,
+                    'dst_ip': dst_ip,
+                    'dst_port': dst_port,
+                }
+                self._increase_count(protocol)
+
+            protocol = data.get('protocol', 'Other')
+            src_port = data.get('src_port', None)
+            dst_port = data.get('dst_port', None)
+            
             if args.verbose:
                 terminal_printout = (
                     f"[{protocol}] {src_ip}:{src_port} --> {dst_ip}:{dst_port} "
@@ -641,9 +457,347 @@ class Sniffer(BaseModule):
     
     def _increase_count(self, protocol: str) -> None:
         """
-        
+        Increments the packet count for the specified protocol in the internal
+        protocol count dictionary. If the protocol has not been seen before it
+        is initialized to 1. Used to build the protocol summary displayed at
+        the end of each sniffing session.
+        Args:
+            protocol (str): The protocol name to increment the count for
+                            e.g. 'TCP', 'DNS', 'TLS'.
         """
         count = self._protocol_count.get(protocol, 0)
         count += 1
         self._protocol_count[protocol] = count
 
+    def _parse_TLS(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+        """
+        Parses a TLS packet and extracts protocol metadata for display and
+        recording. Extracts source and destination ports from the underlying
+        TCP layer, along with the TLS record type and version. Builds a
+        structured data dictionary for JSON recording and optionally generates
+        additional verbose output showing TLS-specific fields.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            src_ip (Any): The source IP address already extracted from the
+                        IP or IPv6 layer by the calling method.
+            dst_ip (Any): The destination IP address already extracted from
+                        the IP or IPv6 layer by the calling method.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output. The additional data string is empty when
+                            verbose mode is not enabled.    
+        """
+        protocol = 'TLS'
+        src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
+        dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
+        tls_type = pkt[TLS].type
+        tls_version = pkt[TLS].version
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'src_port': src_port,
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'tls_type': tls_type,
+            'tls_version': tls_version,
+        }
+
+        self._increase_count(protocol)
+
+        additional_data = (
+            f"\t<Additional_Data>\n"
+            f"\tType: {tls_type}\n"
+            f"\tVersion: {tls_version}"
+        )
+
+        return data, additional_data
+    
+    def _parse_HTTP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+        """
+        Parses an HTTP packet and extracts protocol metadata for display and
+        recording. Handles three HTTP sub-types: HTTPRequest containing the
+        method, path, and HTTP version; HTTPResponse containing the HTTP
+        version, status code, and content length; and generic HTTP for packets
+        that have the HTTP layer but cannot be classified as either request or
+        response. All string fields are decoded from bytes using UTF-8 with
+        replacement for invalid characters. Extracts source and destination
+        ports from the underlying TCP layer.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            src_ip (Any): The source IP address already extracted from the
+                        IP or IPv6 layer by the calling method.
+            dst_ip (Any): The destination IP address already extracted from
+                        the IP or IPv6 layer by the calling method.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output. The additional data string contains
+                            protocol-specific fields for all HTTP sub-types
+                            regardless of verbose mode since HTTP fields are
+                            always useful to display.        
+        """
+        src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
+        dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
+
+        if pkt.haslayer(HTTPRequest):
+            protocol = 'HTTP Request'
+            method = pkt[HTTPRequest].Method.decode(
+                'utf-8', errors='replace'
+                ) if pkt[HTTPRequest].Method else 'N/A'
+            path = pkt[HTTPRequest].Path.decode(
+                'utf-8', errors='replace'
+                ) if pkt[HTTPRequest].Path else 'N/A'
+            http_version = pkt[HTTPRequest].Http_Version.decode(
+                'utf-8', errors='replace'
+                ) if pkt[HTTPRequest].Http_Version else 'N/A'
+
+            data = {
+                'protocol': protocol,
+                'src_ip': src_ip,
+                'src_port': src_port,
+                'dst_ip': dst_ip,
+                'dst_port': dst_port,
+                'method': method,
+                'path': path,
+                'http_version': http_version,
+            }
+
+            self._increase_count(protocol)
+
+            additional_data = (
+                f"\t<Additional_Data>\n"
+                f"\tMethod: {method}\n" 
+                f"\tPath: {path}\n"
+                f"\tVersion: {http_version}"
+            )
+        elif pkt.haslayer(HTTPResponse):
+            protocol = 'HTTP Response'
+            http_version = pkt[HTTPResponse].Http_Version.decode(
+                'utf-8', errors='replace'
+                ) if pkt[HTTPResponse].Http_Version else 'N/A'
+            status_code = pkt[HTTPResponse].Status_Code.decode(
+                'utf-8', errors='replace'
+                ) if pkt[HTTPResponse].Status_Code else 'N/A'
+            content_length = pkt[HTTPResponse].Content_Length.decode(
+                'utf-8', errors='replace'
+                ) if pkt[HTTPResponse].Content_Length else 'N/A'
+
+            data = {
+                'protocol': protocol,
+                'src_ip': src_ip,
+                'src_port': src_port,
+                'dst_ip': dst_ip,
+                'dst_port': dst_port,
+                'http_version': http_version,
+                'status_code': status_code,
+                'content_length': content_length,
+            }
+
+            self._increase_count(protocol)
+
+            additional_data = (
+                f"\t<Additional_Data>\n"
+                f"\tVersion: {http_version}\n"
+                f"\tStatus Code: {status_code}\n"
+                f"\tContent Length: {content_length}"
+            )
+        else:
+            protocol = 'HTTP'
+
+            data = {
+                'protocol': protocol,
+                'src_ip': src_ip,
+                'src_port': src_port,
+                'dst_ip': dst_ip,
+                'dst_port': dst_port,
+            }
+
+            self._increase_count(protocol)
+
+            additional_data = ""
+
+        return data, additional_data
+    
+    def _parse_DNS(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+        """
+        Parses a DNS packet and extracts protocol metadata for display and
+        recording. Determines whether the packet is a query or response using
+        the qr flag and extracts the domain name from the question record if
+        present, falling back to the answer record name for responses that
+        omit the question section. Extracts source and destination ports from
+        the underlying UDP layer.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            src_ip (Any): The source IP address already extracted from the
+                        IP or IPv6 layer by the calling method.
+            dst_ip (Any): The destination IP address already extracted from
+                        the IP or IPv6 layer by the calling method.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output containing the query or response indicator
+                            and the domain name.
+        """
+        protocol = 'DNS'
+        src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
+        dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
+        query_response = 'Query' if pkt[DNS].qr == 0 else 'Response'
+        domain = pkt[DNS].qd.qname.decode() if pkt[DNS].qd else (
+            pkt[DNS].an.rrname.decode() if pkt[DNS].an else 'N/A'
+        )
+        resolve_addr = str(pkt[DNS].an.rdata) if pkt[DNS].an else 'N/A'
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'src_port': src_port,
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'query_response': query_response,
+            'domain': domain,
+            'resolve_addr': resolve_addr,
+        }
+
+        self._increase_count(protocol)
+
+        additional_data = (
+            f"\t<Additional_Data>\n"
+            f"\tQR: {query_response}\n"
+            f"\tDomain: {domain}\n"
+            f"\tAddress: {resolve_addr}"
+        )
+
+        return data, additional_data
+    
+    def _parse_DHCP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+        """
+        Parses a DHCP packet and extracts protocol metadata for display and
+        recording. Extracts source and destination ports from the underlying
+        UDP layer and collects all DHCP options from the packet excluding the
+        end terminator. DHCP options are formatted as a comma-separated string
+        containing each option tuple e.g. ('message-type', 1), ('server_id',
+        '192.168.1.1'). Returns N/A if no options are present.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            src_ip (Any): The source IP address already extracted from the
+                        IP or IPv6 layer by the calling method.
+            dst_ip (Any): The destination IP address already extracted from
+                        the IP or IPv6 layer by the calling method.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output containing all DHCP options present in
+                            the packet.
+        """
+        protocol = 'DHCP'
+        src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
+        dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
+        options = pkt[DHCP].options
+        if options:
+            options_str = ', '.join(
+                str(opt) for opt in options if opt != 'end')
+        else:
+            options_str = 'N/A'
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'src_port': src_port,
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'options': options_str,
+        }
+
+        self._increase_count(protocol)
+
+        additional_data = (
+            f"\t<Additional_Data>\n"
+            f"\tOptions: {options_str}"
+        )
+
+        return data, additional_data
+    
+    def _parse_TCP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+        """
+        Parses a TCP packet and extracts protocol metadata for display and
+        recording. Extracts source and destination ports, TCP control flags,
+        sequence and acknowledgment numbers, receive window size, and checksum.
+        TCP flags are converted from Scapy's FlagValue type to a string
+        representation e.g. 'S' for SYN, 'SA' for SYN-ACK, 'FA' for FIN-ACK.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            src_ip (Any): The source IP address already extracted from the
+                        IP or IPv6 layer by the calling method.
+            dst_ip (Any): The destination IP address already extracted from
+                        the IP or IPv6 layer by the calling method.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output containing TCP flags, sequence number,
+                            acknowledgment number, window size, and checksum
+                            formatted in aligned columns for readability.
+        """
+        protocol = 'TCP'
+        src_port = pkt[TCP].sport
+        dst_port = pkt[TCP].dport
+        flag = str(pkt[TCP].flags)
+        seq = pkt[TCP].seq
+        ack = pkt[TCP].ack
+        window = pkt[TCP].window
+        chksum = pkt[TCP].chksum
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'src_port': src_port,
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'flag': flag,
+            'seq': seq,
+            'ack': ack,
+            'window': window,
+            'chksum': chksum,
+        }
+
+        self._increase_count(protocol)
+
+        additional_data = (
+            f"\t<Additional_Data>\n"
+            f"\tFlags: {flag:<12} SEQ: {seq:<24}\n"
+            f"\tACK: {ack:<12}   Window: {window:<24}\n"
+            f"\tCHKSUM: {chksum}"
+        )
+
+        return data, additional_data
+    
+    def _parse_UDP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+        """
+        
+        """
+        protocol = 'UDP'
+        src_port = pkt[UDP].sport
+        dst_port = pkt[UDP].dport
+        length = pkt[UDP].len
+        chksum = pkt[UDP].chksum
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'src_port': src_port,
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'length': length,
+            'chksum': chksum,
+        }
+
+        self._increase_count(protocol)
+
+        additional_data = (
+            f"\t<Additional_Data>\n"
+            f"\tLEN: {length}\n"
+            f"\tCHKSUM: {chksum}"
+        )
+
+        return data, additional_data
