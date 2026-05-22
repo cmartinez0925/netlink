@@ -104,9 +104,8 @@ class Sniffer(BaseModule):
         parser.description = """Capture and decode live network traffic on the 
         specified interface. Supports BPF filters to narrow capture to specific 
         protocols or hosts. Output has three levels of detail: default shows a 
-        one-line summary per packet, --verbose adds key protocol fields, and
-        --deep-inspect shows a full indented layer breakdown in the terminal. 
-        Use --pcap to save all captured packets for analysis in Wireshark."""
+        one-line summary per packet and --verbose adds key protocol fields. Use 
+        --pcap to save all captured packets for analysis in Wireshark."""
           
         parser.add_argument(
             '-c',
@@ -156,20 +155,6 @@ class Sniffer(BaseModule):
             one-line summary. Best used with a specific BPF filter to reduce 
             noise."""
         )
-
-        parser.add_argument(
-            '--deep-inspect',
-            action='store_true',
-            dest='deep_inspect',
-            default=False,
-            help="""Show a full indented layer-by-layer breakdown for each 
-            captured packet. Displays all available fields per protocol layer. 
-            Very verbose — best used with --count set to a low value 
-            (e.g. 5 or 10) or a tight BPF filter. For full packet inspection 
-            across a session use --pcap and open the file in Wireshark 
-            instead."""
-        )
-
 
     def run(self, args: argparse.Namespace) -> None:
         """
@@ -233,97 +218,31 @@ class Sniffer(BaseModule):
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
         """
-        ICMP_PROTO = 1
-        TCP_PROTO = 6
-        UDP_PROTO = 17
         PKT_SIZE = len(pkt)
-
-        src_ip = None
-        src_port = None
-        src_mac = None
-
-        dst_ip = None
-        dst_port = None
-        dst_mac = None
-        data: dict[str, Any] = dict()
-        
-        protocol = 'Other'
         pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
-        terminal_printout = f"[Other] {pkt_size_print}"
+        data: dict[str, Any] = dict()
 
         if pkt.haslayer(IP):
-            terminal_printout, data = self._inspect_ip(pkt, IP, args) #type: ignore
+            data, terminal_printout = self._inspect_ip(pkt, IP, args) #type: ignore
         elif pkt.haslayer(IPv6):
-            terminal_printout, data = self._inspect_ip(pkt, IPv6, args) #type: ignore
+            data, terminal_printout = self._inspect_ip(pkt, IPv6, args) #type: ignore
         elif pkt.haslayer(ARP):
-            protocol = 'ARP'
-            src_ip = pkt[ARP].psrc
-            src_mac = pkt[ARP].hwsrc
-            dst_ip = pkt[ARP].pdst
-            dst_mac = pkt[ARP].hwdst
-
-            data = {
-                'protocol': protocol,
-                'src_ip': src_ip,
-                'src_mac': src_mac,
-                'dst_ip': dst_ip,
-                'dst_mac': dst_mac,
-            }
-
-            self._increase_count(protocol)
-
-            if args.verbose:
-                #NO NEED FOR VERBOSE AT THE MOMENT
-                pass
-
-            terminal_printout = (
-                f"[{protocol}] {src_ip} ({src_mac}) --> {dst_ip} ({dst_mac}) "
-                f"{pkt_size_print}"
-            )
+            data, terminal_printout = self._parse_ARP(pkt)
         elif pkt.haslayer(Dot1Q):
-            protocol = 'VLAN'
-            src_mac = pkt[Ether].src if pkt.haslayer(Ether) else 'None'
-            dst_mac = pkt[Ether].dst if pkt.haslayer(Ether) else 'None'
-            vlan_id = pkt[Dot1Q].vlan
-
-            data = {
-                'protocol': protocol,
-                'src_mac': src_mac,
-                'dst_mac': dst_mac,
-                'vlan_id': vlan_id,
-            }
-
-            self._increase_count(protocol)
-
-            if args.verbose:
-                #NO NEED FOR VERBOSE AT THE MOMENT
-                pass
-
-            terminal_printout = (
-                f"[{protocol}] id={vlan_id} src={src_mac} --> dst={dst_mac} "
-                f"{pkt_size_print}"
-            )
+            data, terminal_printout = self._parse_Dot1Q(pkt)
         elif pkt.haslayer(STP):
-            protocol = 'STP'
-            proto = pkt[STP].proto
-            version = pkt[STP].version
-            
-            self._increase_count(protocol)
-            
-            if args.verbose:
-                #NO NEED FOR VERBOSE AT THE MOMENT
-                pass
+            data, terminal_printout = self._parse_STP(pkt)
+        else:
+            terminal_printout = f"[Other] {pkt_size_print}"
 
-            terminal_printout = (
-                f"[{protocol}] proto={proto} version={version} {pkt_size_print}"
-            )
-
-
+        if data:
+            self.output.record(data)
         self.output.info(terminal_printout)
-        self.output.record(data)
     
-    def _inspect_ip(self, pkt: Packet, ip_version: IP|IPv6, 
-                    args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
+    def _inspect_ip(self, 
+                    pkt: Packet, 
+                    ip_version: IP|IPv6, 
+                    args: argparse.Namespace) -> tuple[dict, str]:
         """
         Inspects an IP or IPv6 packet and extracts protocol information for
         display. Determines the highest-level protocol present in the packet
@@ -346,114 +265,61 @@ class Sniffer(BaseModule):
                 additional protocol-specific fields when verbose is enabled.
         """
         PKT_SIZE = len(pkt)
-
-        src_ip = None
-        src_port = None
-        dst_ip = None
-        dst_port = None
-        protocol = 'Other'
+        pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
         data: dict[str, Any] = dict()
 
-        pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
-        terminal_printout = f"[Other] {pkt_size_print}"
-        additional_data = ''
-
         if pkt.haslayer(ip_version): #type: ignore
-            src_ip = pkt[ip_version].src #type: ignore
-            dst_ip = pkt[ip_version].dst #type: ignore
-
             if pkt.haslayer(TLS):
-                data, additional_data = self._parse_TLS(pkt, src_ip, dst_ip)
+                data, additional_data = self._parse_TLS(pkt, ip_version)
             elif pkt.haslayer(HTTP):
-                data, additional_data = self._parse_HTTP(pkt, src_ip, dst_ip)
+                data, additional_data = self._parse_HTTP(pkt, ip_version)
             elif pkt.haslayer(DNS):
-                data, additional_data = self._parse_DNS(pkt, src_ip, dst_ip)
+                data, additional_data = self._parse_DNS(pkt, ip_version)
             elif pkt.haslayer(DHCP):
-                data, additional_data = self._parse_DHCP(pkt, src_ip, dst_ip)
+                data, additional_data = self._parse_DHCP(pkt, ip_version)
             elif pkt.haslayer(TCP):
-                data, additional_data = self._parse_TCP(pkt, src_ip, dst_ip)
+                data, additional_data = self._parse_TCP(pkt, ip_version)
             elif pkt.haslayer(UDP):
-                protocol = 'UDP'
-                src_port = pkt[UDP].sport
-                dst_port = pkt[UDP].dport
-                length = pkt[UDP].len
-                chksum = pkt[UDP].chksum
-
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'src_port': src_port,
-                    'dst_ip': dst_ip,
-                    'dst_port': dst_port,
-                    'length': length,
-                    'chksum': chksum,
-                }
-
-                self._increase_count(protocol)
-
-                if args.verbose:
-                    additional_data = (
-                        f"\t<Additional_Data>\n"
-                        f"\tLEN: {length}\n"
-                        f"\tCHKSUM: {chksum}"
-                    )
+                data, additional_data = self._parse_UDP(pkt, ip_version)
             elif pkt.haslayer(ICMP):
-                protocol = 'ICMP'
-                icmp_type = self.ICMP_TYPES.get(pkt[ICMP].type, 'Unknown')
-                icmp_code = self.ICMP_CODES.get(
-                    pkt[ICMP].type, {}).get(
-                        pkt[ICMP].code, 'N/A')
-                icmp_id = pkt[ICMP].id
-                icmp_seq = pkt[ICMP].seq
-
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'dst_ip': dst_ip,
-                    'type': icmp_type,
-                    'code': icmp_code,
-                    'id': icmp_id,
-                    'seq': icmp_seq,
-                }
-
-                self._increase_count(protocol)
-
-                if args.verbose:
-                    additional_data = (
-                        f"\t<Additional_Data>\n"
-                        f"\tType: {icmp_type}\n"
-                        f"\tCode: {icmp_code}\n"
-                        f"\tID: {icmp_id}\n"
-                        f"\tSEQ: {icmp_seq}"
-                    )
+                data, additional_data = self._parse_ICMP(pkt, ip_version)
             else:    
-                protocol = 'IPv4' if ip_version == IP else 'IPv6'
-                data = {
-                    'protocol': protocol,
-                    'src_ip': src_ip,
-                    'dst_ip': dst_ip,
-                    'dst_port': dst_port,
-                }
-                self._increase_count(protocol)
+                data, additional_data = self._parse_IP(pkt, ip_version)
 
             protocol = data.get('protocol', 'Other')
+            src_ip = data.get('src_ip', None)
             src_port = data.get('src_port', None)
+            dst_ip = data.get('dst_ip', None)
             dst_port = data.get('dst_port', None)
             
             if args.verbose:
-                terminal_printout = (
-                    f"[{protocol}] {src_ip}:{src_port} --> {dst_ip}:{dst_port} "
-                    f"{pkt_size_print}"
-                )
-                if additional_data:
-                    terminal_printout += f"\n{additional_data}"
+                if src_port == None or dst_port == None:
+                    terminal_printout = (
+                        f"[{protocol}] {src_ip} --> {dst_ip} {pkt_size_print}"
+                    )
+                    if additional_data:
+                        terminal_printout += f"\n{additional_data}"      
+                else:
+                    terminal_printout = (
+                        f"[{protocol}] {src_ip}:{src_port} --> "
+                        f"{dst_ip}:{dst_port} {pkt_size_print}"
+                    )
+                    if additional_data:
+                        terminal_printout += f"\n{additional_data}"
             else:
-                terminal_printout = (
-                    f"[{protocol}] {src_ip}:{src_port} --> {dst_ip}:{dst_port} "
-                    f"{pkt_size_print}"
-                )      
-        
-        return terminal_printout, data
+                if src_port == None or dst_port == None:
+                    terminal_printout = (
+                        f"[{protocol}] {src_ip} --> {dst_ip} {pkt_size_print}"
+                    )       
+                else:
+                    terminal_printout = (
+                        f"[{protocol}] {src_ip}:{src_port} --> "
+                        f"{dst_ip}:{dst_port} {pkt_size_print}"
+                    )
+        else:
+            terminal_printout = f"[Other] {pkt_size_print}"
+    
+        return data, terminal_printout
     
     def _increase_count(self, protocol: str) -> None:
         """
@@ -469,7 +335,7 @@ class Sniffer(BaseModule):
         count += 1
         self._protocol_count[protocol] = count
 
-    def _parse_TLS(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+    def _parse_TLS(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
         """
         Parses a TLS packet and extracts protocol metadata for display and
         recording. Extracts source and destination ports from the underlying
@@ -478,10 +344,9 @@ class Sniffer(BaseModule):
         additional verbose output showing TLS-specific fields.
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
-            src_ip (Any): The source IP address already extracted from the
-                        IP or IPv6 layer by the calling method.
-            dst_ip (Any): The destination IP address already extracted from
-                        the IP or IPv6 layer by the calling method.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
         Returns:
             tuple[dict, str]: A tuple containing the structured data dictionary
                             for recording and a string of additional verbose
@@ -489,6 +354,8 @@ class Sniffer(BaseModule):
                             verbose mode is not enabled.    
         """
         protocol = 'TLS'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
         src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
         dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
         tls_type = pkt[TLS].type
@@ -514,7 +381,7 @@ class Sniffer(BaseModule):
 
         return data, additional_data
     
-    def _parse_HTTP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+    def _parse_HTTP(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
         """
         Parses an HTTP packet and extracts protocol metadata for display and
         recording. Handles three HTTP sub-types: HTTPRequest containing the
@@ -526,10 +393,9 @@ class Sniffer(BaseModule):
         ports from the underlying TCP layer.
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
-            src_ip (Any): The source IP address already extracted from the
-                        IP or IPv6 layer by the calling method.
-            dst_ip (Any): The destination IP address already extracted from
-                        the IP or IPv6 layer by the calling method.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
         Returns:
             tuple[dict, str]: A tuple containing the structured data dictionary
                             for recording and a string of additional verbose
@@ -538,6 +404,8 @@ class Sniffer(BaseModule):
                             regardless of verbose mode since HTTP fields are
                             always useful to display.        
         """
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
         src_port = pkt[TCP].sport if pkt.haslayer(TCP) else 'None'
         dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else 'None'
 
@@ -620,7 +488,7 @@ class Sniffer(BaseModule):
 
         return data, additional_data
     
-    def _parse_DNS(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+    def _parse_DNS(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
         """
         Parses a DNS packet and extracts protocol metadata for display and
         recording. Determines whether the packet is a query or response using
@@ -630,10 +498,9 @@ class Sniffer(BaseModule):
         the underlying UDP layer.
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
-            src_ip (Any): The source IP address already extracted from the
-                        IP or IPv6 layer by the calling method.
-            dst_ip (Any): The destination IP address already extracted from
-                        the IP or IPv6 layer by the calling method.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
         Returns:
             tuple[dict, str]: A tuple containing the structured data dictionary
                             for recording and a string of additional verbose
@@ -641,6 +508,8 @@ class Sniffer(BaseModule):
                             and the domain name.
         """
         protocol = 'DNS'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
         src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
         dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
         query_response = 'Query' if pkt[DNS].qr == 0 else 'Response'
@@ -671,7 +540,7 @@ class Sniffer(BaseModule):
 
         return data, additional_data
     
-    def _parse_DHCP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+    def _parse_DHCP(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
         """
         Parses a DHCP packet and extracts protocol metadata for display and
         recording. Extracts source and destination ports from the underlying
@@ -681,10 +550,9 @@ class Sniffer(BaseModule):
         '192.168.1.1'). Returns N/A if no options are present.
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
-            src_ip (Any): The source IP address already extracted from the
-                        IP or IPv6 layer by the calling method.
-            dst_ip (Any): The destination IP address already extracted from
-                        the IP or IPv6 layer by the calling method.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
         Returns:
             tuple[dict, str]: A tuple containing the structured data dictionary
                             for recording and a string of additional verbose
@@ -692,6 +560,8 @@ class Sniffer(BaseModule):
                             the packet.
         """
         protocol = 'DHCP'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
         src_port = pkt[UDP].sport if pkt.haslayer(UDP) else 'None'
         dst_port = pkt[UDP].dport if pkt.haslayer(UDP) else 'None'
         options = pkt[DHCP].options
@@ -719,7 +589,7 @@ class Sniffer(BaseModule):
 
         return data, additional_data
     
-    def _parse_TCP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+    def _parse_TCP(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
         """
         Parses a TCP packet and extracts protocol metadata for display and
         recording. Extracts source and destination ports, TCP control flags,
@@ -728,10 +598,9 @@ class Sniffer(BaseModule):
         representation e.g. 'S' for SYN, 'SA' for SYN-ACK, 'FA' for FIN-ACK.
         Args:
             pkt (Packet): The captured packet object provided by Scapy.
-            src_ip (Any): The source IP address already extracted from the
-                        IP or IPv6 layer by the calling method.
-            dst_ip (Any): The destination IP address already extracted from
-                        the IP or IPv6 layer by the calling method.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
         Returns:
             tuple[dict, str]: A tuple containing the structured data dictionary
                             for recording and a string of additional verbose
@@ -740,6 +609,8 @@ class Sniffer(BaseModule):
                             formatted in aligned columns for readability.
         """
         protocol = 'TCP'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
         src_port = pkt[TCP].sport
         dst_port = pkt[TCP].dport
         flag = str(pkt[TCP].flags)
@@ -772,11 +643,26 @@ class Sniffer(BaseModule):
 
         return data, additional_data
     
-    def _parse_UDP(self, pkt: Packet, src_ip: Any, dst_ip: Any) -> tuple[dict,str]:
+    def _parse_UDP(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
         """
-        
+        Parses a UDP packet and extracts protocol metadata for display and
+        recording. Extracts source and destination ports, the total length of
+        the UDP header plus payload in bytes, and the checksum for error
+        detection. UDP is a connectionless protocol so there are no flags,
+        sequence numbers, or acknowledgment fields unlike TCP.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output containing the UDP length and checksum.        
         """
         protocol = 'UDP'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
         src_port = pkt[UDP].sport
         dst_port = pkt[UDP].dport
         length = pkt[UDP].len
@@ -801,3 +687,215 @@ class Sniffer(BaseModule):
         )
 
         return data, additional_data
+    
+    def _parse_ICMP(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
+        """
+        Parses an ICMP packet and extracts protocol metadata for display and
+        recording. Resolves the ICMP type number to a human readable name
+        using the ICMP_TYPES class attribute and resolves the code number to
+        a human readable description using the ICMP_CODES nested dictionary
+        which is keyed by type then code. Returns N/A for codes that have no
+        meaningful description for the given type such as Echo Request and
+        Echo Reply which always use code 0. ICMP has no ports so src_port and
+        dst_port are not included in the data dictionary.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction. Pass IP for IPv4 packets or
+                                    IPv6 for IPv6 packets.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and a string of additional verbose
+                            output containing the ICMP type name, code
+                            description, identifier, and sequence number.
+        """
+        protocol = 'ICMP'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
+        icmp_type = self.ICMP_TYPES.get(pkt[ICMP].type, 'Unknown')
+        icmp_code = self.ICMP_CODES.get(
+            pkt[ICMP].type, {}).get(
+                pkt[ICMP].code, 'N/A')
+        icmp_id = pkt[ICMP].id
+        icmp_seq = pkt[ICMP].seq
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'dst_ip': dst_ip,
+            'type': icmp_type,
+            'code': icmp_code,
+            'id': icmp_id,
+            'seq': icmp_seq,
+        }
+
+        self._increase_count(protocol)
+
+        additional_data = (
+            f"\t<Additional_Data>\n"
+            f"\tType: {icmp_type}\n"
+            f"\tCode: {icmp_code}\n"
+            f"\tID: {icmp_id}\n"
+            f"\tSEQ: {icmp_seq}"
+        )
+
+        return data, additional_data
+    
+    def _parse_IP(self, pkt: Packet, ip_version: IP|IPv6) -> tuple[dict,str]:
+        """
+        Parses a raw IP or IPv6 packet that has no recognized higher-level
+        protocol layer such as TCP, UDP, ICMP, DNS, or TLS. Extracts the
+        source and destination IP addresses and determines the protocol label
+        based on the IP version class passed in. Returns an empty string for
+        additional data since there are no application-layer fields to display
+        for bare IP packets.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+            ip_version (IP | IPv6): The IP layer class to use for address
+                                    extraction and protocol label determination.
+                                    Pass IP for IPv4 packets or IPv6 for IPv6
+                                    packets.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and an empty string for additional
+                            verbose output since bare IP packets have no
+                            application layer fields to display.
+        """
+        protocol = 'IPv4' if ip_version == IP else 'IPv6'
+        src_ip = pkt[ip_version].src #type: ignore
+        dst_ip = pkt[ip_version].dst #type: ignore
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'dst_ip': dst_ip,
+        }
+        
+        self._increase_count(protocol)
+
+        return data, ""
+    
+    def _parse_ARP(self, pkt: Packet) -> tuple[dict, str]:
+        """
+        Parses an ARP packet and extracts protocol metadata for display and
+        recording. ARP operates at layer 2 and does not use IP or port layers
+        so this method extracts both IP and MAC addresses directly from the
+        ARP layer. Includes both sender and target hardware and protocol
+        addresses which together reveal the full ARP transaction context.
+        ARP has no verbose mode since all meaningful fields are always shown
+        in the one-line terminal printout.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and the formatted terminal printout
+                            string showing source and destination IP and MAC
+                            addresses with packet size. Note this method
+                            returns the terminal printout directly rather
+                            than additional verbose data since ARP has no
+                            higher level fields to display.
+        """
+        PKT_SIZE = len(pkt)
+        pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
+
+        protocol = 'ARP'
+        src_ip = pkt[ARP].psrc
+        src_mac = pkt[ARP].hwsrc
+        dst_ip = pkt[ARP].pdst
+        dst_mac = pkt[ARP].hwdst
+
+        data = {
+            'protocol': protocol,
+            'src_ip': src_ip,
+            'src_mac': src_mac,
+            'dst_ip': dst_ip,
+            'dst_mac': dst_mac,
+        }
+
+        self._increase_count(protocol)
+
+        terminal_printout = (
+            f"[{protocol}] {src_ip} ({src_mac}) --> {dst_ip} ({dst_mac}) "
+            f"{pkt_size_print}"
+        )
+
+        return data, terminal_printout
+    
+    def _parse_Dot1Q(self, pkt: Packet) -> tuple[dict, str]:
+        """
+        Parses a Dot1Q VLAN tagged packet and extracts protocol metadata for
+        display and recording. Dot1Q operates at layer 2 and inserts a 4-byte
+        tag between the Ethernet header and the EtherType field to identify
+        which VLAN the frame belongs to. Extracts source and destination MAC
+        addresses from the Ethernet layer and the VLAN identifier from the
+        Dot1Q tag. Returns None for MAC addresses if no Ethernet layer is
+        present. VLAN packets have no verbose mode since all meaningful layer
+        2 fields are shown in the one-line terminal printout.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and the formatted terminal printout
+                            string showing the VLAN ID, source and destination
+                            MAC addresses, and packet size.
+        """
+        PKT_SIZE = len(pkt)
+        pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
+        protocol = 'VLAN'
+        src_mac = pkt[Ether].src if pkt.haslayer(Ether) else 'None'
+        dst_mac = pkt[Ether].dst if pkt.haslayer(Ether) else 'None'
+        vlan_id = pkt[Dot1Q].vlan
+
+        data = {
+            'protocol': protocol,
+            'src_mac': src_mac,
+            'dst_mac': dst_mac,
+            'vlan_id': vlan_id,
+        }
+
+        self._increase_count(protocol)
+
+        terminal_printout = (
+            f"[{protocol}] id={vlan_id} src={src_mac} --> dst={dst_mac} "
+            f"{pkt_size_print}"
+        )
+
+        return data, terminal_printout
+    
+    def _parse_STP(self, pkt: Packet) -> tuple[dict, str]:
+        """
+        Parses a Spanning Tree Protocol packet and extracts protocol metadata
+        for display and recording. STP operates at layer 2 and is used by
+        managed switches to prevent network loops by electing a root bridge
+        and blocking redundant paths. STP frames never contain IP addresses
+        or ports and are pure layer 2 — only the protocol identifier and STP
+        version are extracted. STP has no verbose mode since the protocol and
+        version are the only meaningful fields available at this layer.
+        Args:
+            pkt (Packet): The captured packet object provided by Scapy.
+        Returns:
+            tuple[dict, str]: A tuple containing the structured data dictionary
+                            for recording and the formatted terminal printout
+                            string showing the STP protocol identifier,
+                            version number, and packet size.
+        """
+        PKT_SIZE = len(pkt)
+        pkt_size_print =f"({PKT_SIZE} {'byte' if PKT_SIZE == 1 else 'bytes'})"
+        protocol = 'STP'
+        proto = pkt[STP].proto
+        version = pkt[STP].version
+        
+        data = {
+            'protocol': protocol,
+            'proto': proto,
+            'version': version
+        }
+
+        self._increase_count(protocol)
+
+        terminal_printout = (
+            f"[{protocol}] proto={proto} version={version} {pkt_size_print}"
+        )
+
+        return data, terminal_printout
+    
