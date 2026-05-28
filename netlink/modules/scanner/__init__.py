@@ -162,9 +162,7 @@ class Scanner(BaseModule):
             action='store',
             dest='target',
             required=True,
-            help=(
-                "Target IP range to scan (e.g., 192.168.1.1/24)"
-            )
+            help="Target IP range to scan (e.g., 192.168.1.1/24)"
         )
 
         parser.add_argument(
