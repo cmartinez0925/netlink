@@ -12,6 +12,7 @@ wheels/
 # netlink output files
 *.json
 *.jsonl
+*.pcap
 results*
 
 # macOS
