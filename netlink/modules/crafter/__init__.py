@@ -51,7 +51,7 @@ class Crafter(BaseModule):
 
 
     ############################################################################
-    # Methods
+    # Abstract Required Methods
     ############################################################################
     def add_args(self, parser: argparse.ArgumentParser) -> None:
         """
@@ -248,6 +248,10 @@ class Crafter(BaseModule):
         except Exception as e:
             msg = "Please provide a valid IPv4 or IPv6 address"
             self.output.error(msg)
+            return False
+        
+        if args.count < 0:
+            self.output.warn("Count cannot be a negative value")
             return False
 
         return True
