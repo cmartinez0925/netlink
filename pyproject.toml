@@ -13,3 +13,6 @@ dependencies = [
 
 [project.scripts]
 netlink = "netlink.cli:main"
+
+[tool.uv]
+package = true
