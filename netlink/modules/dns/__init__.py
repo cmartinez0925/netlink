@@ -131,7 +131,7 @@ class DNSAnalyzer(BaseModule):
             action='store',
             dest='count',
             default=0,
-            help="Number of packets to caputre (Default=infinite)"
+            help="Number of packets to capture (Default=infinite)"
         )
 
         parser.add_argument(
