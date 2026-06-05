@@ -368,7 +368,7 @@ class ARPSpoofer(BaseModule):
             sendp(pkt_to_gateway, iface=self.iface, verbose=0)
             msg = (
                     f"Poisoned {args.gateway} -> told gateway victim is at "
-                    "your MAC ({my_mac})"
+                    f"your MAC ({my_mac})"
                 )
             self.output.success(msg)
 
